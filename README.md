@@ -12,6 +12,28 @@ The goal is to make it easy to show GBIF-mediated biodiversity data on custom si
 - **Standard browser APIs.** Custom elements, Shadow DOM and HTML templates are supported natively in all evergreen browsers. No build step is required to *use* a component.
 - **Encapsulated.** Styles and markup do not leak into the host page, and host page styles can be customised through documented CSS custom properties.
 
+## Benefits and limitations
+
+Please weigh these before adopting the components on a site.
+
+**Benefits**
+
+- **Easy to integrate.** One script tag and one HTML element, with no framework or build step required on the host site.
+- **Consistent attribution and licensing.** Components show data and media with their licence and rights holder information built in.
+- **Live data.** Content comes from GBIF's APIs, so it stays current without anyone maintaining a copy.
+- **Isolated by default.** The encapsulated build does not clash with the host site's CSS or scripts.
+- **Shared maintenance.** Fixes and improvements in one component benefit every site that uses it.
+
+**Limitations**
+
+- **Not server-side rendered.** Content is fetched and drawn in the visitor's browser. Visitors without JavaScript see nothing, and search engines or other crawlers that do not run JavaScript will not index the content. If search visibility of this content matters, fetch the data yourself and render it on your server, or treat these components as a complement to your own pages.
+- **Content appears after load.** There is a short delay while data is fetched, so components show loading states and may shift page layout when they fill in. Reserve space for them where it matters.
+- **Dependent on the GBIF API.** If the API is slow, unavailable or rate limiting, components will show an error state. Sites with very high traffic should consider caching through their own proxy.
+- **Visitors' browsers contact GBIF directly.** This exposes visitors' IP addresses to GBIF's servers. Site owners with strict privacy requirements should take this into account and mention it in their privacy notice where needed.
+- **Content you do not control.** Data, names, classifications and images can change as publishers update their datasets, and not every record has media or descriptions. Components should handle missing data gracefully, but they cannot guarantee what is shown.
+- **Styling limits in the encapsulated build.** Theming is done through documented CSS custom properties and parts. Anything beyond that requires the light-DOM build.
+- **Strict security policies.** Sites with a restrictive Content Security Policy need to allow the script and the GBIF API hosts.
+
 ## Technology choices
 
 - **[Lit](https://lit.dev)** (from Google) for building the components. Lit is a small layer over the standard web component APIs. It provides reactive properties, efficient rendering and a convenient way to write templates and styles, without the weight of a full framework.
