@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildUrl, getJson, clearCache, clearMemoryCache, freshSeconds, setRequestTimeout, GbifApiError } from '../../src/shared/api.js';
+import { buildUrl, getJson, clearCache, clearMemoryCache, freshSeconds, setRequestTimeout, setRetryDelay, GbifApiError } from '../../src/shared/api.js';
 import { configure, resolveConfig, DEFAULTS } from '../../src/shared/config.js';
 import {
   safeHttpUrl,
@@ -358,6 +358,61 @@ test('a request that never answers ends in a timeout error, which is not remembe
     assert.deepEqual(await getJson('https://x.test/hang'), { ok: true }, 'the failure was not cached');
   } finally {
     setRequestTimeout(15000);
+    globalThis.fetch = realFetch;
+    clearCache();
+  }
+});
+
+test('a 429 or 503 is tried once more; other failures, and a second failure, are not', async () => {
+  clearCache();
+  const realFetch = globalThis.fetch;
+  setRetryDelay(5);
+  const run = async (statuses) => {
+    let calls = 0;
+    globalThis.fetch = async () => {
+      const status = statuses[Math.min(calls, statuses.length - 1)];
+      calls += 1;
+      return status === 200 ? { ok: true, headers: { get: () => null }, json: async () => ({ ok: calls }) } : { ok: false, status };
+    };
+    clearCache();
+    const result = await getJson(`https://x.test/retry-${statuses.join('-')}`).then((data) => ({ data }), (error) => ({ error }));
+    return { ...result, calls };
+  };
+  try {
+    assert.deepEqual(await run([429, 200]), { data: { ok: 2 }, calls: 2 }, '429 then success');
+    assert.deepEqual(await run([503, 200]), { data: { ok: 2 }, calls: 2 }, '503 then success');
+    const twice = await run([429, 429, 200]);
+    assert.equal(twice.calls, 2, 'only one retry');
+    assert.equal(twice.error.status, 429);
+    const missing = await run([404, 200]);
+    assert.equal(missing.calls, 1, 'a 404 is not retried');
+    assert.equal(missing.error.status, 404);
+    assert.equal((await run([500, 200])).calls, 1, 'a 500 is not retried');
+
+    // No answer a browser can read (a dropped connection, or a 429 without CORS headers): once more.
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls += 1;
+      if (calls === 1) throw new TypeError('Failed to fetch');
+      return { ok: true, headers: { get: () => null }, json: async () => ({ ok: calls }) };
+    };
+    clearCache();
+    assert.deepEqual(await getJson('https://x.test/network'), { ok: 2 });
+    assert.equal(calls, 2);
+
+    // A timeout has waited long enough already.
+    calls = 0;
+    setRequestTimeout(20);
+    globalThis.fetch = (url, { signal }) => {
+      calls += 1;
+      return new Promise((_, reject) => signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
+    };
+    clearCache();
+    await assert.rejects(getJson('https://x.test/slow'), (err) => err.timedOut === true);
+    assert.equal(calls, 1, 'not retried');
+    setRequestTimeout(15000);
+  } finally {
+    setRetryDelay(1200);
     globalThis.fetch = realFetch;
     clearCache();
   }

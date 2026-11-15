@@ -63,8 +63,8 @@ The reviewers mutated the code and found the original browser test missed 9 of 1
 
 Not done, and not claimed in the README:
 
-- **URL-state syncing**, **a `language` attribute**, **pre-fetched data and children as fallback content** (the cheap part of server-side rendering). The README described the first two as if they existed.
-- **Retry and back-off** on 429 and 5xx; **a reference caching proxy** for busy sites.
+- **A `language` attribute** and **pre-fetched data and children as fallback content** (the cheap part of server-side rendering). The README described the first as if it existed.
+- **Back-off beyond one retry**, and **a reference caching proxy** for busy sites. (Since this review: URL-state syncing exists, on `<gbif-occurrence-search>`; and a 429, a 503 or a dropped connection is tried once more.)
 - **A classic-script (non-module) build**, **publishing** to npm or a CDN, **Subresource Integrity** for the lazy chunk.
 - **Contribution structure**: one registered bundle means every contributed component grows it for everyone. No per-component entry points, no base class beyond taxon-based components, no contract test suite, no CI, no stability or deprecation policy, no `CONTRIBUTING`.
 - **Trusted Types**: the map does not render under `require-trusted-types-for 'script'`, because Leaflet assigns HTML.

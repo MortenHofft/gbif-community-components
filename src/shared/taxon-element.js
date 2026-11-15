@@ -1,9 +1,7 @@
-import { LitElement, html, nothing } from 'lit';
-import { resolveConfig } from './config.js';
+import { html, nothing } from 'lit';
+import { GbifCardElement } from './card-element.js';
 import { resolveTaxon } from './taxon.js';
 import { emit } from './events.js';
-import { clampInt } from './format.js';
-import { tokens, cardStyles } from './styles.js';
 
 const RESOLVE_PROPERTIES = ['taxonKey', 'scientificName', 'kingdom', 'rank', 'checklistKey', 'apiBase'];
 
@@ -26,7 +24,7 @@ const RESOLVE_PROPERTIES = ['taxonKey', 'scientificName', 'kingdom', 'rank', 'ch
  *
  * `_taxon.status` is one of: idle | loading | ready | nomatch | error.
  */
-export class GbifTaxonElement extends LitElement {
+export class GbifTaxonElement extends GbifCardElement {
   static properties = {
     taxonKey: { type: String, attribute: 'taxon-key', reflect: true },
     scientificName: { type: String, attribute: 'scientific-name' },
@@ -35,14 +33,9 @@ export class GbifTaxonElement extends LitElement {
     checklistKey: { type: String, attribute: 'checklist-key' },
     apiBase: { type: String, attribute: 'api-base' },
     siteBase: { type: String, attribute: 'site-base' },
-    heading: { type: String },
-    headingLevel: { type: Number, attribute: 'heading-level' },
-    hideSource: { type: Boolean, attribute: 'hide-source' },
     reserveSpace: { type: Boolean, attribute: 'reserve-space' },
     _taxon: { state: true }
   };
-
-  static styles = [tokens, cardStyles];
 
   /** Attributes that only need this component's own data fetched again. */
   static dataProperties = [];
@@ -51,11 +44,6 @@ export class GbifTaxonElement extends LitElement {
     super();
     this._taxon = { status: 'idle' };
     this._runId = 0;
-  }
-
-  /** Effective `apiBase`, `siteBase`, `checklistKey` and `showSource` for this element. */
-  get config() {
-    return resolveConfig(this);
   }
 
   willUpdate(changed) {
@@ -129,17 +117,6 @@ export class GbifTaxonElement extends LitElement {
   /** Name used in alt text and labels. */
   get displayName() {
     return this._taxon.target?.canonicalName || this._taxon.target?.name || this.scientificName || '';
-  }
-
-  /** The card title. Its heading level is the page author's to choose (default 2). */
-  renderTitle(text) {
-    const level = clampInt(this.headingLevel, { min: 1, max: 6, fallback: 2 });
-    return html`<div class="gbif-card__title" role="heading" aria-level=${level} part="title">${text}</div>`;
-  }
-
-  /** "Data from GBIF" style note. Hidden with `hide-source`; licence credits never use this. */
-  renderSource(content) {
-    return this.config.showSource ? html`<p class="gbif-card__source" part="source">${content}</p>` : nothing;
   }
 
   /**

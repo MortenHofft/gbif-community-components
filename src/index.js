@@ -3,10 +3,24 @@ import { GbifMediaGallery } from './components/gbif-media-gallery.js';
 import { GbifOccurrenceMap } from './components/gbif-occurrence-map.js';
 import { GbifTypeSpecimens } from './components/gbif-type-specimens.js';
 import { GbifAttribution } from './components/gbif-attribution.js';
+import { GbifOccurrenceSearch } from './components/gbif-occurrence-search.js';
+import { GbifOccurrenceFilters } from './components/gbif-occurrence-filters.js';
+import { GbifOccurrenceTable } from './components/gbif-occurrence-table.js';
+import { GbifOccurrenceGallery } from './components/gbif-occurrence-gallery.js';
 import { configure } from './shared/config.js';
 
 export { configure };
-export { GbifTaxonCard, GbifMediaGallery, GbifOccurrenceMap, GbifTypeSpecimens, GbifAttribution };
+export {
+  GbifTaxonCard,
+  GbifMediaGallery,
+  GbifOccurrenceMap,
+  GbifTypeSpecimens,
+  GbifAttribution,
+  GbifOccurrenceSearch,
+  GbifOccurrenceFilters,
+  GbifOccurrenceTable,
+  GbifOccurrenceGallery
+};
 
 /** Version of this build, replaced at build time. */
 export const version = typeof __VERSION__ === 'undefined' ? 'dev' : __VERSION__;
@@ -16,7 +30,11 @@ const ELEMENTS = {
   'gbif-media-gallery': GbifMediaGallery,
   'gbif-occurrence-map': GbifOccurrenceMap,
   'gbif-type-specimens': GbifTypeSpecimens,
-  'gbif-attribution': GbifAttribution
+  'gbif-attribution': GbifAttribution,
+  'gbif-occurrence-search': GbifOccurrenceSearch,
+  'gbif-occurrence-filters': GbifOccurrenceFilters,
+  'gbif-occurrence-table': GbifOccurrenceTable,
+  'gbif-occurrence-gallery': GbifOccurrenceGallery
 };
 
 // Register every component. A tag the page has already defined is left alone, and

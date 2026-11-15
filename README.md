@@ -4,7 +4,7 @@ A community-driven collection of **web components** that expose content from [GB
 
 The goal is to make it easy to show GBIF-mediated biodiversity data on custom sites: a museum page about a species, a national park's checklist, a university course site, a conservation NGO's news page, or a citizen-science project. Instead of each site re-implementing GBIF API calls, layout and attribution, a site author adds a single HTML element and gets a working, styled, accessible component.
 
-> **Status:** early prototype. Five elements exist (taxon card, media gallery, occurrence map, type specimens, page attribution) to try out the approach. They are not published anywhere yet, and names, attributes and events may still change.
+> **Status:** early prototype. Nine elements exist: for one taxon (taxon card, media gallery, occurrence map, type specimens), for searching occurrences (search, filter panel, table, image gallery), and a page-footer attribution. They try out the approach. They are not published anywhere yet, and names, attributes and events may still change.
 
 ## Why web components?
 
@@ -28,7 +28,7 @@ Please weigh these before adopting the components on a site.
 
 - **Not server-side rendered.** Content is fetched and drawn in the visitor's browser. Visitors without JavaScript see nothing, and search engines or other crawlers that do not run JavaScript will not index the content. The same goes for print previews of a page that has not finished loading and for CMS editors that do not run scripts. If search visibility of this content matters, fetch the data yourself and render it on your server, or treat these components as a complement to your own pages.
 - **Content appears after load.** There is a short delay while data is fetched. Components show loading states and, unless you add `reserve-space`, may shift the page layout when they fill in.
-- **Dependent on the GBIF API.** If the API is slow, unavailable or rate limiting, components show an error and fire a `gbif-error` event. Requests give up after 15 seconds. There is no retry or back-off yet. Sites with very high traffic should put a caching proxy in front of the API and point `api-base` at it. The image gallery uses an endpoint whose path contains `experimental`; it can change without notice.
+- **Dependent on the GBIF API.** If the API is slow, unavailable or rate limiting, components show an error and fire a `gbif-error` event. A rate-limited or unavailable answer (429, 503) or a dropped connection is tried once more after a short pause; requests give up after 15 seconds. The occurrence search components make several requests for every change to the filters, so a busy site will meet the rate limit sooner. Sites with very high traffic should put a caching proxy in front of the API and point `api-base` at it. The image gallery uses an endpoint whose path contains `experimental`; it can change without notice.
 - **Visitors' browsers contact several servers directly** (see [Privacy and security policies](#privacy-and-security-policies)). That exposes visitors' IP addresses, and the page's address as referrer, to GBIF and to the hosts of the images shown. Mention this in your privacy notice where it applies.
 - **Content you do not control.** Data, names, classifications and images change as publishers update their datasets, and not every record has media. By default the taxonomy comes from the Catalogue of Life, whose content changes with every edition (see [Which taxon do I get?](#which-taxon-do-i-get)).
 - **Styling limits in the encapsulated build.** Theming is done through documented CSS custom properties and `::part()`. Anything beyond that needs the light-DOM build, which does not exist yet.
@@ -59,8 +59,8 @@ Components share one data layer instead of each doing its own thing.
 
 - **A shared API client** (`src/shared/api.js`) is the only code that talks to the GBIF APIs. Components never call `fetch` directly. It builds URLs (the API base may carry a path prefix or be relative to the page, for a same-origin proxy), shares identical in-flight requests, gives up on a request after 15 seconds, and never remembers a failure. Components also ignore a response that arrives after their taxon has changed.
 - **Caching follows what the API says.** GBIF sends `Cache-Control` with `max-age` (10 minutes for occurrence searches, 20 minutes for map capabilities, about an hour for taxon data, 2 days for basemap tiles), but the API also sends `Pragma: no-cache` and `Expires: 0`, and browsers then fetch again on every page view, ignoring the max-age. So the client keeps successful responses in `sessionStorage` for the `max-age` the API gave (at most an hour), and in memory for the life of the page (up to 200 entries). The storage is per tab, holds only public API responses, is cleaned of everything it wrote when it fills up, and is optional: if storage is blocked, requests go to the network. A strict privacy policy may still want to list it.
-- **URL state is not implemented yet.** The idea is opt-in syncing of component state (such as occurrence search filters) to namespaced query parameters, using the History API, so that searches are shareable and the back button works. Components do not touch the page's URL today.
-- **Components on the same page** coordinate through events (see [Events](#events)). No state-management library is planned.
+- **URL state is opt-in, and belongs to the search element.** Components do not touch the page's URL, except `<gbif-occurrence-search sync-url>`, which keeps the visitor's filters in namespaced query parameters (see [Searching occurrences](#searching-occurrences)).
+- **Components on the same page** coordinate in two ways. Components about one taxon use events (see [Events](#events)): the page listens and sets attributes. Components that show one *search* (filter panel, table, gallery) share a query through `<gbif-occurrence-search>` and never talk to each other. No state-management library is planned.
 
 ## Server-side rendering
 
@@ -107,6 +107,71 @@ The first four share these attributes:
 Changing `taxon-key`, `scientific-name`, `kingdom`, `rank`, `checklist-key` or `api-base` after the page has loaded reloads the component. Changing `limit`, `licenses` or `page-size` reloads only that component's own data.
 
 A card without `taxon-key` or `scientific-name` renders nothing.
+
+## Searching occurrences
+
+Occurrence search is not one component but a set that share one query, so that a filter panel, a table and a gallery of images always agree, and the page needs no glue code:
+
+```html
+<gbif-occurrence-search id="s" taxon-key="4QHKG" sync-url></gbif-occurrence-search>
+
+<gbif-occurrence-filters search="#s"></gbif-occurrence-filters>
+<gbif-occurrence-table   search="#s" page-size="20"></gbif-occurrence-table>
+<gbif-occurrence-gallery search="#s" page-size="24"></gbif-occurrence-gallery>
+```
+
+`<gbif-occurrence-search>` draws nothing. It holds the **filters**, and the other three read and change them through it: choosing a country in the panel makes the table and gallery load again, from the first page. They never talk to each other, so there are no event loops and no component is out of step. A component finds its search by `search="#s"` (a CSS selector, so it can be anywhere on the page: a sidebar, a footer) or by being placed **inside** the search element. The search element must exist once the page has been read; one added later is not looked for. A component that finds none says so. [`examples/index.html`](examples/index.html) shows all of it.
+
+| Element | Shows | Own attributes |
+| --- | --- | --- |
+| `gbif-occurrence-search` | Nothing. Holds the filters. | `taxon-key`, `dataset-key`, the author's filters below, `sync-url`, `url-prefix`, `url-history`; `checklist-key`, `api-base`, `site-base` |
+| `gbif-occurrence-filters` | A panel: free text, country, basis of record, year range, the licence of the record, "only records with coordinates". Lists show how many occurrences each value gives. | `filters`, `facet-limit` (1–100, default 15) |
+| `gbif-occurrence-table` | The occurrences, a page at a time. A search with no results says so. | `columns`, `page-size` (1–100, default 20) |
+| `gbif-occurrence-gallery` | The occurrences that have a still image, as a grid, with each image's rights holder and licence. | `page-size` (1–100, default 24), `licenses`, `images` |
+
+All three also take `heading`, `heading-level` and `hide-source`, like the other components.
+
+### Filters
+
+The names are GBIF's own occurrence search parameters, so one query is also an API request, a page address, and a link to GBIF.org.
+
+| Filter | Value | Notes |
+| --- | --- | --- |
+| `country` | one or more ISO codes (`NO`, `SE`) | Shown with country names |
+| `basisOfRecord` | one or more of GBIF's values (`HUMAN_OBSERVATION`, …) | |
+| `year` | `2000`, `2000,2020`, `2000,*` or `*,1990` | A reversed range is put right |
+| `license` | `CC0_1_0`, `CC_BY_4_0`, `CC_BY_NC_4_0` | The licence of the **record** |
+| `hasCoordinate` | `true` | |
+| `q` | text | Up to 200 characters |
+
+Every value is checked before it is sent or written to an address, and an invalid one (a country GBIF does not know, a year that is not a number) is dropped, because the API answers those with an error. The same goes for values taken from the page's address.
+
+**The page author's filters.** Set filters as attributes on the search element: `<gbif-occurrence-search taxon-key="4QHKG" country="NO" year="2000,*">`. Visitors cannot change or remove these, the filter panel does not offer them, and they are never written to the address. Filters a visitor chooses are separate, and `setFilters()` ignores an attempt to change a fixed one.
+
+**From script.** `search.setFilters({ country: ['NO'], year: '2000,*' })` changes the visitor's filters (`null`, `''` or `[]` removes one), `search.reset()` clears them, and `search.query`, `search.userQuery` and `search.params` read them. A change fires `gbif-query-change`.
+
+### The page address
+
+With `sync-url`, the visitor's filters are kept in the address: `?gbif_country=NO&gbif_country=SE&gbif_year=2000,*`.
+
+- The filters are read from the address when the page loads, so a copied address gives the same search.
+- A change by the visitor adds a history entry, so **back and forward** work (`url-history="replace"` replaces the current entry instead).
+- Other parameters and the `#fragment` are left alone.
+- The prefix is `url-prefix` (default `gbif_`). Give each search on a page its own, and `url-prefix=""` for none. A search without `sync-url` ignores the address.
+- Paging is not in the address.
+
+Anything in the address is untrusted: it is validated like every other filter value.
+
+### Table and gallery
+
+The table's `columns` is a list chosen from `scientificName`, `country`, `eventDate`, `year`, `basisOfRecord`, `recordedBy`, `dataset`, `institution`, `license` (default: `scientificName country eventDate basisOfRecord dataset`); names not in the list are ignored. Values from the records are shown as text. GBIF does not page past 100,000 results, and nor do these two.
+
+The gallery asks only for occurrences with a still image, and shows the first image of each. Its `licenses` works like the one on `<gbif-media-gallery>` (see [Image licences](#image-licences)) and filters **each image's** licence. That is not the panel's licence filter, which is about the licence of the *record*. A page can show fewer images than its `page-size` when `licenses` hides some. `images` is `gbif` (default) or `original`:
+
+- `gbif` shows small versions (400 px wide) from GBIF's image cache. Visitors' browsers then contact GBIF for the pictures and not the publishers' servers, and download a fraction of the bytes (a few kilobytes instead of a few hundred). If the cache has no picture, the publisher's file is tried, and then a message is shown with the credit.
+- `original` shows the publishers' full-size files.
+
+A failed page of the same search keeps what is on screen and says so. A failed new search (the visitor changed a filter) clears it, since the old rows would be wrong for the new filters.
 
 ### Image licences
 
@@ -170,9 +235,10 @@ Components tell the page what happened through DOM events. All of them bubble an
 | `gbif-taxon-resolved` | A taxon was found | `taxonKey`, `scientificName`, `rank`, `isSynonym`, `matchType`, `confidence`, `checklistKey` |
 | `gbif-taxon-notfound` | No taxon (or no confident match) was found | `query`, `byKey`, `matchType`, `confidence`, `checklistKey` |
 | `gbif-taxon-select` | A visitor clicked a taxon in the classification, or "View on GBIF.org" (cancelable) | `taxonKey`, `scientificName`, `rank`, `checklistKey`, `source` (`classification` or `gbif-link`) |
-| `gbif-occurrence-select` | A visitor clicked an image's "details" link or a type specimen (cancelable) | `occurrenceKey`, `source` |
+| `gbif-occurrence-select` | A visitor clicked an image's "details" link, a type specimen, a name in the table, or a picture in the occurrence gallery (cancelable) | `occurrenceKey`, `source` (`media`, `type-specimens`, `table`, `gallery`) |
 | `gbif-occurrences-select` | A visitor clicked the occurrence count, or the gallery's "all" link (cancelable) | `taxonKey`, `checklistKey`, `url`, `source` |
 | `gbif-map-explore` | A visitor clicked "Explore on GBIF.org" (cancelable) | `bounds`, `geometry` (WKT), `url` |
+| `gbif-query-change` | An occurrence search's filters changed. Fired by `gbif-occurrence-search`. | `query` (all filters in force), `userQuery`, `params` (the API request parameters), `source` (`update`, `reset`, `url` for back and forward, `attributes`) |
 | `gbif-error` | A request failed or timed out, or an image or the map could not load | `component`, `url`, `status`, `message` |
 
 **Cancelable events are navigation intents.** Links in the components point at GBIF.org, but a plain click first fires the event. If the page calls `preventDefault()`, nothing is opened and the page decides what to do, for example show the taxon on its own pages. Clicks with a modifier key (open in a new tab) are left to the browser. The licence link, the link to the checklist and the basemap's attribution links are not intents: they are credit.
@@ -199,6 +265,8 @@ Add `follow-selection` to the card to let it load a taxon clicked in the classif
 | Classification | `v2/taxon/tree/{checklistKey}/{taxonKey}` |
 | Checklist title and version (source notes) | `v2/taxon/checklist/{checklistKey}` |
 | Occurrence count, type specimens | `v1/occurrence/search` |
+| Filter panel, table, gallery | `v1/occurrence/search`, with `facet` (counts for the panel), and `mediaType=StillImage` (gallery) |
+| Small versions of images | `v1/image/cache/fit-in/400x/occurrence/{occurrenceKey}/media/{md5 of the image URL}` |
 | Images | `v1/occurrence/experimental/multimedia/species/{checklistKey}/{taxonKey}` |
 | Map | `v2/map/occurrence/density/…` |
 | Basemap | `tile.gbif.org` |
@@ -213,9 +281,9 @@ A visitor's browser contacts these hosts directly. Your own `api-base` replaces 
 | --- | --- |
 | `api.gbif.org` | All data, and the occurrence layer of the map |
 | `tile.gbif.org` | The default map basemap (carries OpenStreetMap and OpenMapTiles data) |
-| **Whatever hosts the images** | Gallery images. GBIF returns links to the publishers' own servers, so this is not a fixed list: many are on `inaturalist-open-data.s3.amazonaws.com`, others are anywhere. Images are requested with `referrerpolicy="no-referrer"`, so your page's address is not sent to them. |
+| **Whatever hosts the images** | Images in `<gbif-media-gallery>`. GBIF returns links to the publishers' own servers, so this is not a fixed list: many are on `inaturalist-open-data.s3.amazonaws.com`, others are anywhere. Images are requested with `referrerpolicy="no-referrer"`, so your page's address is not sent to them. `<gbif-occurrence-gallery>` avoids this: it asks GBIF's image cache (`api.gbif.org`) and only falls back to the publisher if that has no picture. |
 
-For a **Content Security Policy** the smallest working policy that was tested is `script-src` for the bundle's origin, `connect-src https://api.gbif.org`, and `img-src https: data:`, with no `style-src` needed. Because image hosts cannot be listed in advance, a strict `img-src` blocks gallery images ("Image failed to load", and a `gbif-error` event). A stricter `img-src` works if you proxy images yourself, or leave the gallery out. With `require-trusted-types-for 'script'` the map does not render, because Leaflet assigns HTML; the other components work. Responses are kept in `sessionStorage` (see above). If the bundle is served from another origin than the page, that origin must send CORS headers for the bundle file and its chunks.
+For a **Content Security Policy** the smallest working policy that was tested is `script-src` for the bundle's origin, `connect-src https://api.gbif.org`, and `img-src https: data:`, with no `style-src` needed. Because image hosts cannot be listed in advance, a strict `img-src` blocks the images in `<gbif-media-gallery>` ("Image failed to load", and a `gbif-error` event). The occurrence gallery needs only `api.gbif.org` while the image cache has the picture, and `https:` for its fallback. A stricter `img-src` works if you proxy images yourself, or leave the gallery out. With `require-trusted-types-for 'script'` the map does not render, because Leaflet assigns HTML; the other components work. Responses are kept in `sessionStorage` (see above). If the bundle is served from another origin than the page, that origin must send CORS headers for the bundle file and its chunks.
 
 ## Getting started
 
@@ -231,7 +299,7 @@ npm run test:all                  # unit tests and the stubbed browser tests
 
 The two browser tests need [Playwright](https://playwright.dev) to be resolvable and a Chromium browser installed.
 
-The build writes `dist/gbif-components.js` (Lit and all five components, about 20 KB gzipped) and, in `dist/chunks/`, Leaflet (about 54 KB gzipped, only downloaded when a map is drawn). **Serve the whole `dist/` directory**, not just the one file: the entry loads its chunks by relative path. The chunk names are fixed, so a directory can be copied to a CDN under a versioned path. There is no classic-script build, so load the bundle with `<script type="module">`. Content Management Systems that rewrite or concatenate scripts may need that to be turned off for this one. Nothing is published to npm or a CDN yet.
+The build writes `dist/gbif-components.js` (Lit and all nine components, about 28 KB gzipped) and, in `dist/chunks/`, Leaflet (about 54 KB gzipped, only downloaded when a map is drawn). **Serve the whole `dist/` directory**, not just the one file: the entry loads its chunks by relative path. The chunk names are fixed, so a directory can be copied to a CDN under a versioned path. There is no classic-script build, so load the bundle with `<script type="module">`. Content Management Systems that rewrite or concatenate scripts may need that to be turned off for this one. Nothing is published to npm or a CDN yet.
 
 If another script has already defined one of the tags, the bundle leaves it alone and warns in the console.
 
@@ -271,7 +339,7 @@ The prototype follows these. They are open for discussion and may change as the 
 - **Attributes:** use kebab-case HTML attributes (`taxon-key`, `page-size`). Use the GBIF identifiers and parameter names where practical so that people familiar with the API can guess them. Numbers are read defensively: whole numbers within bounds, otherwise the default.
 - **Language:** labels are English only for now. A `language` attribute with translations contributed as data is planned, and is not implemented.
 - **Events:** components emit `CustomEvent`s with a `gbif-` prefix for meaningful user actions and outcomes so host pages can react. Events that would otherwise open a link are cancelable (see [Events](#events)).
-- **Styling:** write plain CSS with BEM class names. Expose theming through CSS custom properties with a `--gbif-` prefix, each with a sensible fallback. The current set is `--gbif-font-family`, `--gbif-font-size`, `--gbif-color-text`, `--gbif-color-muted`, `--gbif-color-link`, `--gbif-color-accent`, `--gbif-color-accent-hover`, `--gbif-color-accent-text`, `--gbif-color-surface`, `--gbif-color-surface-hover`, `--gbif-color-border`, `--gbif-color-control-border`, `--gbif-color-media-background`, `--gbif-color-error`, `--gbif-color-focus`, `--gbif-radius`, `--gbif-card-padding`, `--gbif-gallery-height` and `--gbif-map-height`. Main elements are also exposed as `::part()` (`card`, `header`, `title`, `body`, `footer`, `source`, and `viewer` or `viewport` where present). Text colour and font are set on the card itself, so a host rule such as `body * { color: … }` cannot make a card unreadable.
+- **Styling:** write plain CSS with BEM class names. Expose theming through CSS custom properties with a `--gbif-` prefix, each with a sensible fallback. The current set is `--gbif-font-family`, `--gbif-font-size`, `--gbif-color-text`, `--gbif-color-muted`, `--gbif-color-link`, `--gbif-color-accent`, `--gbif-color-accent-hover`, `--gbif-color-accent-text`, `--gbif-color-surface`, `--gbif-color-surface-hover`, `--gbif-color-border`, `--gbif-color-control-border`, `--gbif-color-media-background`, `--gbif-color-error`, `--gbif-color-focus`, `--gbif-radius`, `--gbif-card-padding`, `--gbif-gallery-height`, `--gbif-gallery-tile` (the occurrence gallery's tile size) and `--gbif-map-height`. Main elements are also exposed as `::part()` (`card`, `header`, `title`, `body`, `footer`, `source`, and `viewer` or `viewport` where present). Text colour and font are set on the card itself, so a host rule such as `body * { color: … }` cannot make a card unreadable.
 - **Safe markup and links:** text from the API is escaped. The italic markup GBIF puts in scientific names is the only HTML let through, and only as plain `<i>` and `<em>` tags. Links and image sources from API data are only used if they are `http` or `https`.
 - **Few global side effects.** Components add no global CSS. The bundle registers its custom elements, defines one global, `GbifComponents` (for `configure` and `version`), and uses `sessionStorage` for responses.
 - **Contrast and motion:** default colours meet WCAG AA. Animations stop under `prefers-reduced-motion`, and print styles keep the badge and buttons readable.
@@ -284,9 +352,14 @@ gbif-community-components/
 │   ├── index.js             # registers every component, defines GbifComponents
 │   ├── components/          # one file per component
 │   └── shared/
-│       ├── api.js           # the only code that calls GBIF: URLs, de-duplication, cache, timeout
+│       ├── api.js           # the only code that calls GBIF: URLs, de-duplication, cache, timeout, one retry
 │       ├── taxon.js         # name or key -> taxon: Taxon API for details, match only for names
-│       ├── taxon-element.js # base class: shared inputs, resolving, events
+│       ├── card-element.js  # base class of every card: title, source note, configuration
+│       ├── taxon-element.js # base class for one taxon: shared inputs, resolving, events
+│       ├── search-consumer.js # base class for the parts of an occurrence search
+│       ├── filters.js       # the occurrence filters: validation, URLs
+│       ├── occurrence.js    # occurrence search and facets, table columns, images and thumbnails
+│       ├── md5.js           # names images for GBIF's image cache
 │       ├── events.js        # emit() and cancelable "navigation intent" clicks
 │       ├── config.js        # defaults and configure()
 │       ├── styles.js        # theming variables and card styles

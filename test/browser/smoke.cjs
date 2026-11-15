@@ -132,6 +132,32 @@ const check = async (label, fn) => {
       assert.equal(title, 'Mountain lion');
     });
 
+    await check('one search drives the filter panel, the table, the gallery and the address', async () => {
+      const table = page.locator('gbif-occurrence-table');
+      const images = page.locator('gbif-occurrence-gallery');
+      await table.locator('tbody tr').first().waitFor({ timeout: 60000 });
+      await images.locator('img').first().waitFor({ timeout: 60000 });
+      await page.locator('gbif-occurrence-filters .gbif-occurrence-filters__option', { hasText: 'Argentina' }).first().locator('input').check();
+      await page.waitForFunction(() => /gbif_country=AR/.test(location.search), null, { timeout: 30000 });
+      await page.waitForFunction(
+        () => {
+          const cells = [...document.querySelector('gbif-occurrence-table').shadowRoot.querySelectorAll('tbody tr td:nth-child(2)')];
+          return cells.length > 0 && cells.every((cell) => cell.textContent.trim() === 'Argentina');
+        },
+        null,
+        { timeout: 60000 }
+      );
+      // The gallery follows too, and its pictures come from GBIF's image cache, not the publishers.
+      await page.waitForFunction(
+        () => {
+          const imgs = [...document.querySelector('gbif-occurrence-gallery').shadowRoot.querySelectorAll('img')];
+          return imgs.length > 0 && imgs.every((img) => img.complete && img.naturalWidth > 0 && img.src.includes('/v1/image/cache/'));
+        },
+        null,
+        { timeout: 60000 }
+      );
+    });
+
     await check('details come from the Taxon API, never the deprecated Species API', async () => {
       assert.ok(gbifRequests.some((p) => p.startsWith('/v2/taxon/tree/')), 'classification from /v2/taxon/tree');
       assert.ok(gbifRequests.some((p) => /^\/v2\/taxon\/[^/]+\/[^/]+$/.test(p)), 'name usage from /v2/taxon');

@@ -14,6 +14,10 @@
  * - Failures are never remembered.
  * - Requests time out, so a hung connection ends in an error, not an endless
  *   "Loading".
+ * - A "too many requests" (429) or "unavailable" (503) answer, or a request that got
+ *   no readable answer at all, is tried once more after a short pause. (The API does
+ *   not let browsers read `Retry-After`, so the pause is a guess.) Anything else, a
+ *   timeout, and a second failure are errors.
  */
 
 const MAX_ENTRIES = 200;
@@ -23,17 +27,33 @@ const STORAGE_PREFIX = 'gbif-components:v1:';
 
 const cache = new Map();
 let requestTimeoutMs = 15000;
+let retryDelayMs = 1200;
+const RETRY_STATUSES = [429, 503];
+
+/**
+ * Worth one more try: the API is busy or unavailable, or the request never got an answer
+ * a browser can read. A rate limiter in front of the API may answer 429 without the CORS
+ * headers that let a page see the status, which looks just like a dropped connection.
+ * A timeout is not retried: it has already waited long enough.
+ */
+const shouldRetry = (err) => RETRY_STATUSES.includes(err.status) || (err.status === 0 && !err.timedOut);
+
+/** How long to wait before the one retry (mainly for tests). */
+export function setRetryDelay(ms) {
+  retryDelayMs = Number.isFinite(ms) && ms >= 0 ? ms : 1200;
+}
 
 export function setRequestTimeout(ms) {
   requestTimeoutMs = Number.isFinite(ms) && ms > 0 ? ms : 15000;
 }
 
 export class GbifApiError extends Error {
-  constructor(message, { url, status = 0 } = {}) {
+  constructor(message, { url, status = 0, timedOut = false } = {}) {
     super(message);
     this.name = 'GbifApiError';
     this.url = url;
     this.status = status;
+    this.timedOut = timedOut;
   }
 }
 
@@ -95,10 +115,7 @@ function writeStored(url, data, seconds) {
   }
 }
 
-async function request(url) {
-  const stored = readStored(url);
-  if (stored !== undefined) return stored;
-
+async function attempt(url) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
   try {
@@ -109,10 +126,23 @@ async function request(url) {
     return data;
   } catch (err) {
     if (err instanceof GbifApiError) throw err;
-    if (controller.signal.aborted) throw new GbifApiError('Request timed out', { url });
+    if (controller.signal.aborted) throw new GbifApiError('Request timed out', { url, timedOut: true });
     throw new GbifApiError(err.message || 'Network error', { url });
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function request(url) {
+  const stored = readStored(url);
+  if (stored !== undefined) return stored;
+  try {
+    return await attempt(url);
+  } catch (err) {
+    if (!shouldRetry(err)) throw err;
+    // A little randomness, so that several requests turned away together do not all come back together.
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs * (1 + Math.random() * 0.5)));
+    return attempt(url);
   }
 }
 

@@ -188,11 +188,11 @@ test('getJson shares in-flight requests, caches successes and never caches failu
   let fail = true;
   globalThis.fetch = async () => {
     calls += 1;
-    return fail ? { ok: false, status: 503 } : { ok: true, json: async () => ({ calls }) };
+    return fail ? { ok: false, status: 500 } : { ok: true, json: async () => ({ calls }) };
   };
 
   try {
-    await assert.rejects(getJson('https://x.test/a'), (err) => err instanceof GbifApiError && err.status === 503 && err.url === 'https://x.test/a');
+    await assert.rejects(getJson('https://x.test/a'), (err) => err instanceof GbifApiError && err.status === 500 && err.url === 'https://x.test/a');
     fail = false;
     const [one, two] = await Promise.all([getJson('https://x.test/a'), getJson('https://x.test/a')]);
     assert.strictEqual(one, two);
