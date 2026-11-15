@@ -238,6 +238,20 @@ test('searchOccurrences sends the filters, the page, and survives odd responses'
   await withFetch(null, async () => assert.deepEqual(await searchOccurrences({ apiBase: 'https://api.test', params: {}, limit: 1, offset: 0 }), { count: 0, results: [] }));
 });
 
+test('the last page GBIF allows is trimmed, so offset + limit never passes the cap', async () => {
+  await withFetch({ count: 2268126852, results: [] }, async (urls) => {
+    // 24 a page: the last page starts at 99,984, and 99,984 + 24 would be a 400 from the API.
+    await searchOccurrences({ apiBase: 'https://api.test', params: {}, limit: 24, offset: 99984 });
+    await searchOccurrences({ apiBase: 'https://api.test', params: {}, limit: 24, offset: 0 });
+    await searchOccurrences({ apiBase: 'https://api.test', params: {}, limit: 20, offset: 99980 });
+    const [last, first, exact] = urls.map((u) => [Number(u.searchParams.get('offset')), Number(u.searchParams.get('limit'))]);
+    assert.deepEqual(last, [99984, 16]);
+    assert.equal(last[0] + last[1], MAX_RESULTS);
+    assert.deepEqual(first, [0, 24], 'ordinary pages are untouched');
+    assert.deepEqual(exact, [99980, 20]);
+  });
+});
+
 test('fetchFacets asks for counts that ignore a filter\'s own choice, and cleans the answer', async () => {
   const body = { count: 100, facets: [{ field: 'COUNTRY', counts: [{ name: 'NO', count: 5 }, { name: 7, count: 1 }, null, { name: 'SE', count: 'x' }] }, { field: 'LICENSE' }, null] };
   await withFetch(body, async (urls) => {

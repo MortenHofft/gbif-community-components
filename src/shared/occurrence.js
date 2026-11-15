@@ -9,12 +9,18 @@ import { RECORD_LICENSES } from './filters.js';
  * Everything from the API is treated as untrusted.
  */
 
-/** GBIF does not page past this many results. The table and gallery stop here. */
+/**
+ * GBIF does not page past this many results: a request is refused when `offset + limit`
+ * goes beyond 100,001 (checked: 99,981 + 20 is accepted, 99,990 + 20 is a 400). The
+ * table and gallery stop at 100,000.
+ */
 export const MAX_RESULTS = 100000;
 
 /** One page of occurrence search results for a set of request parameters. */
 export async function searchOccurrences({ apiBase, params, limit, offset }) {
-  const data = await getJson(buildUrl(apiBase, '/v1/occurrence/search', { ...params, limit, offset }));
+  // The last page the API allows may be shorter than the others.
+  const allowed = Math.max(0, Math.min(limit, MAX_RESULTS - offset));
+  const data = await getJson(buildUrl(apiBase, '/v1/occurrence/search', { ...params, limit: allowed, offset }));
   return {
     count: typeof data?.count === 'number' ? data.count : 0,
     results: (Array.isArray(data?.results) ? data.results : []).filter((row) => row && typeof row === 'object')
