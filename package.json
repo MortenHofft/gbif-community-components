@@ -1,0 +1,22 @@
+{
+  "name": "gbif-community-components",
+  "version": "0.0.1",
+  "description": "Community web components that expose GBIF-mediated content for reuse on any website.",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "dev": "vite --open /examples/",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node --test \"test/unit/*.test.js\"",
+    "test:browser": "node test/browser/smoke.cjs"
+  },
+  "dependencies": {
+    "leaflet": "^1.9.4",
+    "lit": "^3.3.3"
+  },
+  "devDependencies": {
+    "vite": "^8.3.8"
+  }
+}

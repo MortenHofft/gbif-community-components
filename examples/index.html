@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GBIF Community Components: examples</title>
+    <style>
+      body {
+        max-width: 64rem;
+        margin: 0 auto;
+        padding: 1.5rem 1rem 4rem;
+        font-family: system-ui, sans-serif;
+        line-height: 1.5;
+        color: #1f2933;
+      }
+      h1 { margin-bottom: 0.25rem; }
+      h2 { margin: 2.5rem 0 0.25rem; }
+      .lede { margin-top: 0; color: #667085; }
+      .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); align-items: start; }
+      .stack { display: grid; gap: 1rem; }
+      .picker { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0; }
+      .picker button { padding: 0.35rem 0.8rem; border: 1px solid #d5dbe1; border-radius: 999px; background: #fff; font: inherit; cursor: pointer; }
+      .picker button:hover { background: #f2f4f7; }
+      #event-log { max-height: 12rem; margin: 0; padding: 0.75rem; overflow: auto; border-radius: 6px; background: #101418; color: #d1e7d1; font-size: 0.75rem; }
+      code { background: #f2f4f7; padding: 0.05rem 0.3rem; border-radius: 3px; }
+
+      /* Theming from the host page: only CSS custom properties are needed. */
+      .themed {
+        --gbif-font-family: Georgia, 'Times New Roman', serif;
+        --gbif-color-accent: #8a4b08;
+        --gbif-color-accent-hover: #6e3b06;
+        --gbif-color-border: #e0c9a8;
+        --gbif-color-surface: #fffaf2;
+        --gbif-radius: 0;
+      }
+    </style>
+    <!-- In a real page this would be the built file, for example:
+         <script type="module" src="https://your-cdn/gbif-components.js"></script> -->
+    <script type="module" src="../src/index.js"></script>
+  </head>
+  <body>
+    <h1>GBIF Community Components</h1>
+    <p class="lede">Four cards, each one HTML element. Everything below talks to the live GBIF API.</p>
+
+    <h2>1. A taxon page from four elements</h2>
+    <p class="lede">
+      Click a taxon in the classification. The card fires a <code>gbif-taxon-select</code> event; this page listens
+      and points the other three components at the same taxon. Ctrl- or cmd-click still opens GBIF.org.
+    </p>
+    <div class="picker" id="picker">
+      <button data-name="Puma concolor">Puma concolor</button>
+      <button data-name="Bellis perennis">Bellis perennis</button>
+      <button data-name="Quercus">Quercus (genus)</button>
+      <button data-name="Felidae">Felidae (family)</button>
+      <button data-name="Not a real taxon xyz">No match</button>
+    </div>
+    <div class="grid">
+      <div class="stack">
+        <gbif-taxon-card id="main-card" scientific-name="Puma concolor" follow-selection></gbif-taxon-card>
+        <gbif-type-specimens class="follower" scientific-name="Puma concolor" page-size="5"></gbif-type-specimens>
+      </div>
+      <div class="stack">
+        <gbif-media-gallery class="follower" scientific-name="Puma concolor" limit="12"></gbif-media-gallery>
+        <gbif-occurrence-map class="follower" scientific-name="Puma concolor"></gbif-occurrence-map>
+      </div>
+    </div>
+
+    <h3>Events seen on this page</h3>
+    <pre id="event-log" aria-live="polite"></pre>
+
+    <h2>2. Themed from the host page</h2>
+    <p class="lede">Same component, restyled with a few <code>--gbif-*</code> custom properties.</p>
+    <div class="themed">
+      <gbif-taxon-card taxon-key="4QHKG" heading="Mountain lion"></gbif-taxon-card>
+    </div>
+
+    <script type="module">
+      const card = document.querySelector('#main-card');
+      const followers = document.querySelectorAll('.follower');
+      const log = document.querySelector('#event-log');
+
+      function point(target) {
+        const { taxonKey, scientificName } = target;
+        for (const el of [card, ...followers]) {
+          el.taxonKey = taxonKey;
+          el.scientificName = scientificName;
+        }
+      }
+
+      // The page reacts when the visitor picks a taxon in the classification.
+      card.addEventListener('gbif-taxon-select', (event) => {
+        // follow-selection makes the card load the taxon itself; the others follow here.
+        for (const el of followers) {
+          el.scientificName = undefined;
+          el.taxonKey = event.detail.taxonKey;
+        }
+      });
+
+      document.querySelector('#picker').addEventListener('click', (event) => {
+        const name = event.target.dataset?.name;
+        if (name) point({ scientificName: name, taxonKey: undefined });
+      });
+
+      // Show every GBIF event so it is clear what a page can react to.
+      for (const name of [
+        'gbif-taxon-select',
+        'gbif-taxon-resolved',
+        'gbif-occurrence-select',
+        'gbif-map-explore',
+        'gbif-error'
+      ]) {
+        document.addEventListener(name, (event) => {
+          const source = event.target.localName;
+          log.textContent += `${source}  ${name}  ${JSON.stringify(event.detail)}\n`;
+          log.scrollTop = log.scrollHeight;
+        });
+      }
+    </script>
+  </body>
+</html>
