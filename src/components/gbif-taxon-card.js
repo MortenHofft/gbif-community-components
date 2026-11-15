@@ -3,12 +3,13 @@ import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { GbifTaxonElement } from '../shared/taxon-element.js';
 import { buildUrl, getJson } from '../shared/api.js';
 import { linkIntent } from '../shared/events.js';
-import { safeNameHtml, rankLabel } from '../shared/format.js';
+import { safeNameHtml, safeHttpUrl, rankLabel, statusLabel } from '../shared/format.js';
+import { getChecklistInfo } from '../shared/taxon.js';
 import { taxonUrl, occurrenceSearchUrl } from '../shared/links.js';
 
 /**
  * <gbif-taxon-card taxon-key="4QHKG"></gbif-taxon-card>
- * <gbif-taxon-card scientific-name="Puma concolor"></gbif-taxon-card>
+ * <gbif-taxon-card scientific-name="Ficus" kingdom="Plantae"></gbif-taxon-card>
  *
  * Name, classification and occurrence count for one taxon.
  *
@@ -17,19 +18,22 @@ import { taxonUrl, occurrenceSearchUrl } from '../shared/links.js';
  *
  *   card.addEventListener('gbif-taxon-select', (e) => {
  *     e.preventDefault();            // stop the link, the page takes over
- *     showTaxon(e.detail.taxonKey);  // detail: taxonKey, scientificName, rank, checklistKey
+ *     showTaxon(e.detail.taxonKey);  // detail: taxonKey, scientificName, rank, checklistKey, source
  *   });
  *
- * With the `follow-selection` attribute the card also loads the clicked taxon
- * itself, unless the page cancelled the event.
+ * With the `follow-selection` attribute the card also loads a taxon clicked in
+ * the classification itself, unless the page cancelled the event.
  *
- * Other events: `gbif-taxon-resolved` (a taxon was found) and `gbif-error`.
+ * Other events: `gbif-taxon-select` also fires (source "gbif-link") for the
+ * "View on GBIF.org" button, `gbif-occurrences-select` for the occurrence
+ * count link, `gbif-taxon-resolved`, `gbif-taxon-notfound` and `gbif-error`.
  */
 export class GbifTaxonCard extends GbifTaxonElement {
   static properties = {
     ...GbifTaxonElement.properties,
     followSelection: { type: Boolean, attribute: 'follow-selection' },
-    _count: { state: true }
+    _count: { state: true },
+    _checklist: { state: true }
   };
 
   static styles = [
@@ -39,9 +43,9 @@ export class GbifTaxonCard extends GbifTaxonElement {
         margin: 0 0 0.5rem;
         font-size: 1.15rem;
       }
-      .gbif-taxon-card__synonym {
+      .gbif-taxon-card__note {
         margin: 0 0 0.5rem;
-        color: var(--gbif-color-muted, #667085);
+        color: var(--gbif-color-muted, #596273);
         font-size: 0.8rem;
       }
       .gbif-taxon-card__classification {
@@ -56,7 +60,7 @@ export class GbifTaxonCard extends GbifTaxonElement {
       .gbif-taxon-card__ancestor::after {
         content: '›';
         margin: 0 0.35rem;
-        color: var(--gbif-color-muted, #667085);
+        color: var(--gbif-color-muted, #596273);
       }
       .gbif-taxon-card__ancestor:last-child::after {
         content: '';
@@ -64,7 +68,7 @@ export class GbifTaxonCard extends GbifTaxonElement {
       }
       .gbif-taxon-card__rank-label {
         margin-right: 0.25rem;
-        color: var(--gbif-color-muted, #667085);
+        color: var(--gbif-color-muted, #596273);
         font-size: 0.68rem;
         text-transform: uppercase;
         letter-spacing: 0.03em;
@@ -80,7 +84,10 @@ export class GbifTaxonCard extends GbifTaxonElement {
       }
       .gbif-taxon-card__count {
         margin: 0;
-        color: var(--gbif-color-muted, #667085);
+        color: var(--gbif-color-muted, #596273);
+      }
+      .gbif-taxon-card__view {
+        margin-left: auto;
       }
     `
   ];
@@ -88,14 +95,23 @@ export class GbifTaxonCard extends GbifTaxonElement {
   constructor() {
     super();
     this._count = null;
+    this._checklist = null;
   }
 
   onTaxonReset() {
     this._count = null;
+    this._checklist = null;
   }
 
   async onTaxonReady(taxon, isCurrent) {
-    const { apiBase, checklistKey } = this.config;
+    const { apiBase, checklistKey, showSource } = this.config;
+
+    if (showSource) {
+      getChecklistInfo({ apiBase, checklistKey }).then((info) => {
+        if (isCurrent()) this._checklist = info;
+      });
+    }
+
     const url = buildUrl(apiBase, '/v1/occurrence/search', {
       taxonKey: taxon.target.key,
       checklistKey,
@@ -111,14 +127,19 @@ export class GbifTaxonCard extends GbifTaxonElement {
     }
   }
 
-  _onRankClick(event, rank) {
-    const intent = linkIntent(this, event, 'gbif-taxon-select', {
-      taxonKey: rank.key,
-      scientificName: rank.name,
-      rank: rank.rank,
+  /** Detail shared by every "this taxon was chosen" event. */
+  _taxonDetail(taxon, source) {
+    return {
+      taxonKey: taxon.key,
+      scientificName: taxon.name,
+      rank: taxon.rank,
       checklistKey: this.config.checklistKey,
-      source: 'classification'
-    });
+      source
+    };
+  }
+
+  _onRankClick(event, rank) {
+    const intent = linkIntent(this, event, 'gbif-taxon-select', this._taxonDetail(rank, 'classification'));
     if (intent && !intent.defaultPrevented && this.followSelection) {
       event.preventDefault();
       this.scientificName = undefined;
@@ -126,10 +147,22 @@ export class GbifTaxonCard extends GbifTaxonElement {
     }
   }
 
+  _renderMatchNote(taxon) {
+    if (taxon.matchType === 'HIGHERRANK') {
+      return html`<p class="gbif-taxon-card__note">
+        Matched to the nearest higher taxon found for “${this.scientificName}”.
+      </p>`;
+    }
+    if (taxon.matchType === 'VARIANT') {
+      return html`<p class="gbif-taxon-card__note">Matched “${this.scientificName}” as a spelling variant.</p>`;
+    }
+    return nothing;
+  }
+
   _renderClassification(taxon, siteBase) {
     if (!taxon.classification.length) return nothing;
     return html`
-      <ol class="gbif-taxon-card__classification" aria-label="Classification">
+      <ol class="gbif-taxon-card__classification" role="list" aria-label="Classification">
         ${taxon.classification.map((rank) => {
           const label = html`<span class="gbif-taxon-card__rank-label">${rankLabel(rank.rank)}</span>`;
           return rank.key === taxon.target.key
@@ -160,12 +193,34 @@ export class GbifTaxonCard extends GbifTaxonElement {
       taxonKey: taxon.target.key,
       checklistKey: config.checklistKey
     });
+    const onClick = (event) =>
+      linkIntent(this, event, 'gbif-occurrences-select', {
+        taxonKey: taxon.target.key,
+        checklistKey: config.checklistKey,
+        url: href,
+        source: 'count'
+      });
     return html`<p class="gbif-taxon-card__count">
-      <a href=${href} target="_blank" rel="noopener"
+      <a href=${href} target="_blank" rel="noopener" @click=${onClick}
         ><strong>${this._count.toLocaleString()}</strong> occurrence${this._count === 1 ? '' : 's'}</a
       >
       in GBIF
     </p>`;
+  }
+
+  _renderSource() {
+    const info = this._checklist;
+    const checklistUrl = safeHttpUrl(info?.url);
+    const checklistName = [info?.title, info?.version].filter(Boolean).join(' ');
+    return this.renderSource(html`
+      ${checklistName
+        ? html`Taxonomy:
+            ${checklistUrl
+              ? html`<a href=${checklistUrl} target="_blank" rel="noopener">${checklistName}</a>`
+              : checklistName}.`
+        : nothing}
+      Occurrence data from GBIF.
+    `);
   }
 
   _renderBody() {
@@ -173,8 +228,6 @@ export class GbifTaxonCard extends GbifTaxonElement {
     const config = this.config;
 
     switch (taxon.status) {
-      case 'idle':
-        return html`<p class="gbif-card__state">Set <code>taxon-key</code> or <code>scientific-name</code>.</p>`;
       case 'loading':
         return html`<p class="gbif-card__state" role="status">Loading…</p>`;
       case 'error':
@@ -188,9 +241,11 @@ export class GbifTaxonCard extends GbifTaxonElement {
       default:
         return html`
           <p class="gbif-taxon-card__name">${unsafeHTML(safeNameHtml(taxon.target.formattedName || taxon.target.name))}</p>
+          ${this._renderMatchNote(taxon)}
           ${taxon.isSynonym
-            ? html`<p class="gbif-taxon-card__synonym">
-                Synonym: ${unsafeHTML(safeNameHtml(taxon.usage.formattedName || taxon.usage.name))}
+            ? html`<p class="gbif-taxon-card__note">
+                ${statusLabel(taxon.usage.status || 'synonym')}:
+                ${unsafeHTML(safeNameHtml(taxon.usage.formattedName || taxon.usage.name))}
               </p>`
             : nothing}
           ${this._renderClassification(taxon, config.siteBase)} ${this._renderOccurrenceCount(taxon, config)}
@@ -200,23 +255,27 @@ export class GbifTaxonCard extends GbifTaxonElement {
 
   render() {
     const taxon = this._taxon;
+    if (taxon.status === 'idle') return nothing;
+
+    const config = this.config;
     return html`
       <section class="gbif-card" part="card" aria-busy=${taxon.status === 'loading' ? 'true' : 'false'}>
         <header class="gbif-card__header" part="header">
           <span class="gbif-card__badge">GBIF</span>
-          <h2 class="gbif-card__title">${this.heading || 'This taxon in GBIF'}</h2>
+          ${this.renderTitle(this.heading || 'This taxon in GBIF')}
         </header>
         <div class="gbif-card__body" part="body">${this._renderBody()}</div>
         ${taxon.status === 'ready'
           ? html`<footer class="gbif-card__footer" part="footer">
-              <span>Data from GBIF</span>
               <a
-                class="gbif-button gbif-button--primary"
-                href=${taxonUrl(this.config.siteBase, taxon.target.key)}
+                class="gbif-button gbif-button--primary gbif-taxon-card__view"
+                href=${taxonUrl(config.siteBase, taxon.target.key)}
                 target="_blank"
                 rel="noopener"
+                @click=${(event) => linkIntent(this, event, 'gbif-taxon-select', this._taxonDetail(taxon.target, 'gbif-link'))}
                 >View on GBIF.org</a
               >
+              ${this._renderSource()}
             </footer>`
           : nothing}
       </section>

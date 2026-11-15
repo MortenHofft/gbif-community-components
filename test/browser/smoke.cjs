@@ -57,7 +57,7 @@ const check = async (label, fn) => {
   });
 
   const card = page.locator('#main-card');
-  const gallery = page.locator('gbif-media-gallery');
+  const gallery = page.locator('gbif-media-gallery').first();
   const map = page.locator('gbif-occurrence-map');
   const types = page.locator('gbif-type-specimens');
   const log = page.locator('#event-log');
@@ -117,7 +117,7 @@ const check = async (label, fn) => {
 
     await check('a synonym resolves to the accepted taxon and says so', async () => {
       await page.getByRole('button', { name: 'Felis concolor (synonym)' }).click();
-      await card.locator('.gbif-taxon-card__synonym').filter({ hasText: 'Felis concolor' }).waitFor({ timeout: 30000 });
+      await card.locator('.gbif-taxon-card__note').filter({ hasText: 'Synonym' }).filter({ hasText: 'Felis concolor' }).waitFor({ timeout: 30000 });
       assert.match(await card.locator('.gbif-taxon-card__name').innerText(), /^Puma concolor/);
       await gallery.locator('.gbif-media-gallery__image').waitFor({ timeout: 30000 });
       assert.match(await gallery.locator('.gbif-media-gallery__image').getAttribute('alt'), /^Image of Puma concolor/);

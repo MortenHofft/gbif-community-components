@@ -10,7 +10,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test \"test/unit/*.test.js\"",
-    "test:browser": "node test/browser/smoke.cjs"
+    "test:browser": "node test/browser/smoke.cjs",
+    "test:browser:components": "node test/browser/components.cjs",
+    "test:all": "npm test && npm run test:browser:components"
   },
   "dependencies": {
     "leaflet": "^1.9.4",

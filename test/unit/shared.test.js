@@ -23,6 +23,7 @@ test('safeNameHtml keeps italics and escapes everything else', () => {
 
 test('formatLicense recognises Creative Commons licences', () => {
   assert.deepEqual(formatLicense('http://creativecommons.org/licenses/by-nc/4.0/'), {
+    key: 'cc-by-nc',
     label: 'CC BY-NC 4.0',
     url: 'http://creativecommons.org/licenses/by-nc/4.0/'
   });

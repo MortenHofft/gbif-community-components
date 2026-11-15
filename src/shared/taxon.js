@@ -9,7 +9,13 @@ import { buildUrl, getJson } from './api.js';
  * every lookup needs the checklist key as well.
  */
 
-const ACCEPTED_MATCH_TYPES = ['EXACT', 'FUZZY', 'HIGHERRANK'];
+/**
+ * Match types worth trusting. The v2 match API reports `EXACT`, `VARIANT` (a
+ * spelling variant), `HIGHERRANK` (a higher taxon than the one asked for) and
+ * `NONE`. `CANONICAL` and `FUZZY` are kept for older or other deployments.
+ * Anything else, and anything below MIN_CONFIDENCE, is refused.
+ */
+const ACCEPTED_MATCH_TYPES = ['EXACT', 'VARIANT', 'CANONICAL', 'FUZZY', 'HIGHERRANK'];
 const MIN_CONFIDENCE = 80;
 
 /** A name match is only trusted if its type and confidence are good enough. */
@@ -34,14 +40,25 @@ export function normalizeTaxon(taxon) {
   };
 }
 
+/**
+ * Is this usage a name that points to another, accepted, taxon? That is true of
+ * every non-accepted status (synonym, heterotypic synonym, ambiguous synonym,
+ * misapplied name, ...), so the test is the pointer, not the status text.
+ */
+export function pointsToAccepted(usage) {
+  return !!usage.acceptedKey && usage.acceptedKey !== usage.key;
+}
+
 /** Taxon API classification (root first) -> list of `{ key, name, rank }`. */
 export function normalizeClassification(list) {
-  return (Array.isArray(list) ? list : []).map((taxon) => ({
-    key: taxon.taxonID,
-    name: taxon.scientificName,
-    rank: taxon.taxonRank,
-    speciesCount: taxon.species
-  }));
+  return (Array.isArray(list) ? list : [])
+    .filter((taxon) => taxon && taxon.taxonID)
+    .map((taxon) => ({
+      key: taxon.taxonID,
+      name: taxon.scientificName,
+      rank: taxon.taxonRank,
+      speciesCount: taxon.species
+    }));
 }
 
 const detailPath = (checklistKey, taxonKey) =>
@@ -63,19 +80,24 @@ async function getJsonOrNull(url) {
 
 /**
  * Resolve a taxon by key or by name within a checklist. A key takes precedence.
+ * `kingdom` and `rank` narrow a name match, which is how homonyms such as
+ * *Ficus* or *Oenanthe* are told apart.
  *
  * Returns `{ found: false }` when nothing (confident) is found, otherwise:
  *   usage           the taxon that was asked for
  *   target          the accepted taxon: `usage` itself, or what a synonym points to
- *   isSynonym       whether `usage` is a synonym
+ *   isSynonym       whether `usage` points to a different, accepted taxon
  *   classification  ancestors from the root down to `target`
+ *   matchType       (names only) how the name was matched: EXACT, VARIANT, HIGHERRANK, ...
  */
-export async function resolveTaxon({ apiBase, checklistKey, taxonKey, scientificName }) {
+export async function resolveTaxon({ apiBase, checklistKey, taxonKey, scientificName, kingdom, rank }) {
   let key = taxonKey;
   let matchInfo = {};
 
   if (!key) {
-    const data = await getJson(buildUrl(apiBase, '/v2/species/match', { scientificName, checklistKey }));
+    const data = await getJson(
+      buildUrl(apiBase, '/v2/species/match', { scientificName, kingdom, rank, checklistKey })
+    );
     matchInfo = { matchType: data?.diagnostics?.matchType, confidence: data?.diagnostics?.confidence };
     if (!isConfidentMatch(data)) return NOT_FOUND(matchInfo);
     key = data.usage.key;
@@ -89,14 +111,14 @@ export async function resolveTaxon({ apiBase, checklistKey, taxonKey, scientific
   classificationRequest.catch(() => {});
 
   const detail = await getJsonOrNull(detailUrl);
-  if (!detail) return NOT_FOUND(matchInfo);
+  if (!detail || !detail.taxonID) return NOT_FOUND(matchInfo);
 
   const usage = normalizeTaxon(detail);
   let target = usage;
-  const isSynonym = usage.status === 'SYNONYM' && !!usage.acceptedKey;
+  const isSynonym = pointsToAccepted(usage);
   if (isSynonym) {
     const accepted = await getJsonOrNull(buildUrl(apiBase, detailPath(checklistKey, usage.acceptedKey)));
-    if (!accepted) return NOT_FOUND(matchInfo);
+    if (!accepted || !accepted.taxonID) return NOT_FOUND(matchInfo);
     target = normalizeTaxon(accepted);
   }
 
@@ -109,4 +131,23 @@ export async function resolveTaxon({ apiBase, checklistKey, taxonKey, scientific
     classification: normalizeClassification(await classificationRequest),
     ...matchInfo
   };
+}
+
+/**
+ * Title, version and link of a checklist, for source notes. A failure here is
+ * not worth showing an error for, so it returns `null`.
+ */
+export async function getChecklistInfo({ apiBase, checklistKey }) {
+  try {
+    const data = await getJson(buildUrl(apiBase, `/v2/taxon/checklist/${encodeURIComponent(checklistKey)}`));
+    if (!data || typeof data !== 'object') return null;
+    return {
+      title: typeof data.title === 'string' ? data.title : undefined,
+      version: typeof data.version === 'string' ? data.version : undefined,
+      alias: typeof data.alias === 'string' ? data.alias : undefined,
+      url: typeof data.url === 'string' ? data.url : undefined
+    };
+  } catch {
+    return null;
+  }
 }

@@ -21,23 +21,109 @@ export function safeNameHtml(html = '') {
     .replace(/&amp;(amp|lt|gt|quot|#39);/g, '&$1;');
 }
 
-/** Turn a licence URL into a short label and a link. */
-export function formatLicense(url) {
-  if (!url) return null;
+/**
+ * Only http(s) URLs may reach an `href` or `src`, whatever the API returned.
+ * Returns the normalised URL, or `null` for anything else (including non-strings).
+ */
+export function safeHttpUrl(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
+  } catch {
+    return null;
+  }
+}
 
-  const cc = url.match(/creativecommons\.org\/licenses\/([a-z-]+)\/([0-9.]+)/i);
-  if (cc) return { label: `CC ${cc[1].toUpperCase()} ${cc[2]}`, url };
+/**
+ * Licence keys used for filtering, and what they are called on screen.
+ * `unknown` stands for a missing or unrecognised licence.
+ */
+export const LICENSES = {
+  cc0: 'CC0',
+  pdm: 'Public Domain',
+  'cc-by': 'CC BY',
+  'cc-by-sa': 'CC BY-SA',
+  'cc-by-nd': 'CC BY-ND',
+  'cc-by-nc': 'CC BY-NC',
+  'cc-by-nc-sa': 'CC BY-NC-SA',
+  'cc-by-nc-nd': 'CC BY-NC-ND',
+  unknown: 'Unknown licence'
+};
 
-  const cc0 = url.match(/creativecommons\.org\/publicdomain\/zero\/([0-9.]+)/i);
-  if (cc0) return { label: `CC0 ${cc0[1]}`, url };
+/** Shortcuts for the two questions most sites actually have. */
+export const LICENSE_GROUPS = {
+  /** Licences that allow commercial use. */
+  commercial: ['cc0', 'pdm', 'cc-by', 'cc-by-sa', 'cc-by-nd'],
+  /** Licences that allow adapting the work. */
+  derivatives: ['cc0', 'pdm', 'cc-by', 'cc-by-sa', 'cc-by-nc', 'cc-by-nc-sa']
+};
 
-  const mark = url.match(/creativecommons\.org\/publicdomain\/mark\/([0-9.]+)/i);
-  if (mark) return { label: `Public Domain ${mark[1]}`, url };
+const CC_HOSTS = new Set(['creativecommons.org', 'www.creativecommons.org']);
 
-  return { label: url.replace(/^https?:\/\//, ''), url };
+/** Identify a Creative Commons licence from its URL. */
+function parseCreativeCommons(url) {
+  const parsed = safeHttpUrl(url) && new URL(url.trim());
+  if (!parsed || !CC_HOSTS.has(parsed.hostname)) return null;
+
+  const licence = /^\/licenses\/([a-z-]+)\/([0-9.]+)\/?/i.exec(parsed.pathname);
+  if (licence) {
+    const type = licence[1].toLowerCase();
+    return { key: LICENSES[`cc-${type}`] ? `cc-${type}` : 'unknown', label: `CC ${type.toUpperCase()} ${licence[2]}`, url: parsed.href };
+  }
+  const zero = /^\/publicdomain\/zero\/([0-9.]+)\/?/i.exec(parsed.pathname);
+  if (zero) return { key: 'cc0', label: `CC0 ${zero[1]}`, url: parsed.href };
+  const mark = /^\/publicdomain\/mark\/([0-9.]+)\/?/i.exec(parsed.pathname);
+  if (mark) return { key: 'pdm', label: `Public Domain ${mark[1]}`, url: parsed.href };
+  return null;
+}
+
+/** Turn a licence URL into `{ key, label, url }`, or `null` if it is not a usable URL. */
+export function formatLicense(value) {
+  const safe = safeHttpUrl(value);
+  if (!safe) return null;
+  const cc = parseCreativeCommons(safe);
+  if (cc) return cc;
+  const parsed = new URL(safe);
+  return { key: 'unknown', label: `${parsed.host}${parsed.pathname}`.replace(/\/$/, ''), url: safe };
+}
+
+/** The filter key for a licence URL (`unknown` if missing or unrecognised). */
+export function licenseKey(value) {
+  return formatLicense(value)?.key ?? 'unknown';
+}
+
+/**
+ * Parse a `licenses` attribute such as "cc0, cc-by" or "commercial" into a Set
+ * of keys. Returns `null` (no filtering) for an empty value or the word `all`.
+ * Unknown words are ignored; if nothing valid is left, nothing is filtered out
+ * wrongly and `null` is returned.
+ */
+export function parseLicenseFilter(attribute) {
+  if (!attribute || typeof attribute !== 'string') return null;
+  const wanted = new Set();
+  for (const word of attribute.toLowerCase().split(/[\s,]+/).filter(Boolean)) {
+    if (word === 'all') return null;
+    if (LICENSE_GROUPS[word]) LICENSE_GROUPS[word].forEach((key) => wanted.add(key));
+    else if (LICENSES[word]) wanted.add(word);
+  }
+  return wanted.size ? wanted : null;
 }
 
 /** `FORMA_SPECIALIS` -> `forma specialis` */
 export function rankLabel(rank = '') {
-  return rank.toLowerCase().replace(/_/g, ' ');
+  return String(rank).toLowerCase().replace(/_/g, ' ');
+}
+
+/** `AMBIGUOUS_SYNONYM` -> `Ambiguous synonym` */
+export function statusLabel(status = '') {
+  const text = rankLabel(status);
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** Read a number attribute defensively: whole numbers only, within bounds. */
+export function clampInt(value, { min = 1, max = 300, fallback }) {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
 }

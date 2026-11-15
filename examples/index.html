@@ -53,6 +53,8 @@
       <button data-name="Quercus">Quercus (genus)</button>
       <button data-name="Felidae">Felidae (family)</button>
       <button data-name="Felis concolor">Felis concolor (synonym)</button>
+      <button data-name="Ficus" data-kingdom="Plantae">Ficus (kingdom Plantae)</button>
+      <button data-name="Puma concolr">Puma concolr (typo)</button>
       <button data-name="Not a real taxon xyz">No match</button>
     </div>
     <div class="grid">
@@ -75,16 +77,30 @@
       <gbif-taxon-card taxon-key="4QHKG" heading="Mountain lion"></gbif-taxon-card>
     </div>
 
+    <h2>3. One source note for the whole page</h2>
+    <p class="lede">
+      With many GBIF cards, credit GBIF once in the footer instead of on every card: put <code>hide-source</code> on
+      the cards and add <code>&lt;gbif-attribution&gt;</code>. Image credits and licences stay on each image. This
+      gallery only shows images that allow commercial use (<code>licenses="commercial"</code>).
+    </p>
+    <div class="grid">
+      <gbif-taxon-card scientific-name="Bellis perennis" hide-source heading="Daisy" heading-level="3"></gbif-taxon-card>
+      <gbif-media-gallery scientific-name="Bellis perennis" licenses="commercial" limit="12" hide-source heading="Daisy images" heading-level="3"></gbif-media-gallery>
+    </div>
+    <footer style="margin-top: 1.5rem; padding-top: 0.75rem; border-top: 1px solid #d5dbe1">
+      <gbif-attribution>Example Museum is not affiliated with GBIF.</gbif-attribution>
+    </footer>
+
     <script type="module">
       const card = document.querySelector('#main-card');
       const followers = document.querySelectorAll('.follower');
       const log = document.querySelector('#event-log');
 
-      function point(target) {
-        const { taxonKey, scientificName } = target;
+      function point({ taxonKey, scientificName, kingdom }) {
         for (const el of [card, ...followers]) {
           el.taxonKey = taxonKey;
           el.scientificName = scientificName;
+          el.kingdom = kingdom;
         }
       }
 
@@ -98,15 +114,17 @@
       });
 
       document.querySelector('#picker').addEventListener('click', (event) => {
-        const name = event.target.dataset?.name;
-        if (name) point({ scientificName: name, taxonKey: undefined });
+        const { name, kingdom } = event.target.dataset ?? {};
+        if (name) point({ scientificName: name, kingdom, taxonKey: undefined });
       });
 
       // Show every GBIF event so it is clear what a page can react to.
       for (const name of [
         'gbif-taxon-select',
         'gbif-taxon-resolved',
+        'gbif-taxon-notfound',
         'gbif-occurrence-select',
+        'gbif-occurrences-select',
         'gbif-map-explore',
         'gbif-error'
       ]) {
