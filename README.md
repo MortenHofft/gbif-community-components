@@ -22,6 +22,27 @@ The goal is to make it easy to show GBIF-mediated biodiversity data on custom si
   - **Encapsulated** (Shadow DOM): the default and the starting point. Styles are fully isolated from the host page.
   - **Light DOM**: for authors who need detailed styling control. Planned as a second build over the same shared code, and not yet implemented.
 
+## Data fetching and URL state
+
+Components share one data layer instead of each doing its own thing.
+
+- **A shared API client** (in `shared/`) is the only code that talks to the GBIF APIs. Components never call `fetch` directly. The client handles query building, error handling, de-duplication of identical in-flight requests, short-lived caching and cancellation of stale requests (via `AbortController`).
+- **Lit reactive controllers** wrap the client for components. A reusable fetch controller exposes `loading`, `error` and `data`, so every component handles those states the same way with a line or two of code.
+- **URL state is opt-in.** Components work entirely from their attributes and internal state by default and do not touch the host page's URL. Components such as occurrence search can opt in to URL syncing (for example with a `sync-url` attribute) to make searches shareable and the back button work. Synced parameters are namespaced (for example `gbif_country=NO`) so they cannot collide with the host site's own parameters. Syncing uses the standard History API; no router library is needed.
+- **Components on the same page** coordinate through events (for example `gbif-filter-change`) or a small shared state object. No state-management library is planned. The exact mechanism will be decided when the first multi-component example needs it.
+
+## Server-side rendering
+
+Components are **client-side rendered** to begin with: the browser loads the script, the component fetches its data from GBIF and draws itself. Search engines that do not run JavaScript will therefore not see the content.
+
+Server-side rendering (SSR) is possible in principle, since Lit has experimental SSR support and browsers support Declarative Shadow DOM, but it is not a goal of the first versions. To keep the option open, components should:
+
+- keep rendering free of direct `window` / `document` access outside lifecycle methods,
+- do data fetching through the shared controllers rather than scattered through templates, and
+- where practical, accept pre-fetched data so a site can render content itself and let the component take over in the browser.
+
+The light-DOM build is naturally easier to index, since its content is ordinary page markup.
+
 ## Example usage
 
 The exact element names and attributes are not final. The following illustrates the intended style:
