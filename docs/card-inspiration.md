@@ -4,6 +4,8 @@ Design notes on four existing GBIF "panel" cards, used as inspiration for the fi
 
 I read the code but did not run it or check the endpoints against the live API. Verify the endpoints and parameters below before building on them.
 
+> **Update:** the components in this repository do not copy the prototype's taxon lookup. The prototype resolved everything through `v2/species/match`. The components use the Taxon API (`v2/taxon/{checklistKey}/{taxonKey}` and `v2/taxon/tree/…`) for details and the classification, and use the match API only to turn a name into a key. See "GBIF APIs used" in the README.
+
 ## The four cards
 
 | Card | What it shows | GBIF API used |

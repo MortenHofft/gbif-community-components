@@ -123,6 +123,19 @@ card.addEventListener('gbif-taxon-select', (event) => {
 
 Add `follow-selection` to the card to let it load the clicked taxon itself, if the page did not cancel the event. A page can still listen to keep other components in step. [`examples/index.html`](examples/index.html) does this with all four components.
 
+### GBIF APIs used
+
+| Need | API |
+| --- | --- |
+| Turn a name into a taxon key | `v2/species/match` (only when `scientific-name` is used) |
+| Taxon details | `v2/taxon/{checklistKey}/{taxonKey}` ([Taxon API](https://techdocs.gbif.org/en/openapi/v2/taxon)) |
+| Classification | `v2/taxon/tree/{checklistKey}/{taxonKey}` |
+| Occurrence count, type specimens | `v1/occurrence/search` |
+| Images | `v1/occurrence/experimental/multimedia/species/{checklistKey}/{taxonKey}` |
+| Map | `v2/map/occurrence/density/…` |
+
+Taxon details always come from the Taxon API, which replaces the deprecated v1 Species API. The Species API is not used. Taxon keys are scoped to a checklist and are not globally unique, which is why every lookup needs a `checklist-key`. The Taxon API is currently served under `/v2/experimental/taxon` as well, and both paths return the same data today. The components use the documented `/v2/taxon` path.
+
 ## Getting started
 
 ```bash
@@ -186,7 +199,7 @@ gbif-community-components/
 │   ├── components/          # one file per component
 │   └── shared/
 │       ├── api.js           # the only code that calls GBIF: de-duplication, cache, errors
-│       ├── match.js         # name or key -> taxon, with confidence gating and synonyms
+│       ├── taxon.js         # name or key -> taxon: Taxon API for details, match only for names
 │       ├── taxon-element.js # base class: shared inputs, matching, error events
 │       ├── events.js        # emit() and cancelable "navigation intent" clicks
 │       ├── config.js        # defaults and configure()

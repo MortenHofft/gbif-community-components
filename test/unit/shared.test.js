@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { safeNameHtml, formatLicense, rankLabel } from '../../src/shared/format.js';
 import { buildUrl, getJson, clearCache, GbifApiError } from '../../src/shared/api.js';
-import { describeMatch } from '../../src/shared/match.js';
+import { resolveTaxon, isConfidentMatch, normalizeTaxon } from '../../src/shared/taxon.js';
 import { configure, resolveConfig, DEFAULTS } from '../../src/shared/config.js';
 import { linkIntent } from '../../src/shared/events.js';
 
@@ -14,6 +14,11 @@ test('safeNameHtml keeps italics and escapes everything else', () => {
   assert.equal(safeNameHtml('<i onclick="x()">a</i>'), '&lt;i onclick=&quot;x()&quot;&gt;a</i>');
   assert.equal(safeNameHtml('<img src=x onerror=y>'), '&lt;img src=x onerror=y&gt;');
   assert.equal(safeNameHtml(), '');
+  // Entities already encoded by the API are not double-escaped, but a lone & is escaped.
+  assert.equal(safeNameHtml('Eukaryota (Chatton, 1925) Whittaker &amp; Margulis'), 'Eukaryota (Chatton, 1925) Whittaker &amp; Margulis');
+  assert.equal(safeNameHtml('Whittaker & Margulis'), 'Whittaker &amp; Margulis');
+  assert.equal(safeNameHtml('&lt;script&gt;'), '&lt;script&gt;', 'decodes to text, never to a tag');
+  assert.equal(safeNameHtml('&amp;lt;b&amp;gt;'), '&amp;lt;b&amp;gt;');
 });
 
 test('formatLicense recognises Creative Commons licences', () => {
@@ -40,32 +45,131 @@ test('buildUrl skips empty values and repeats array values', () => {
   assert.deepEqual(url.searchParams.getAll('t'), ['x', 'y']);
 });
 
-test('describeMatch only trusts confident matches', () => {
-  const good = { usage: { key: 'A', status: 'ACCEPTED' }, classification: [{ key: 'A' }], diagnostics: { matchType: 'EXACT', confidence: 99 } };
-  assert.equal(describeMatch(good).found, true);
-  assert.equal(describeMatch(good).target.key, 'A');
+/** Canned responses shaped like the real API output, served by a stubbed fetch. */
+const CHECKLIST = 'cl';
+const PUMA = { taxonID: '4QHKG', scientificName: 'Puma concolor', scientificNameAuthorship: '(Linnaeus, 1771)', taxonRank: 'SPECIES', label: '<i>Puma concolor</i> (Linnaeus, 1771)', taxonomicStatus: 'ACCEPTED', parentNameUsageID: '75F9' };
+const FELIS = { taxonID: '3DXV5', scientificName: 'Felis concolor', taxonRank: 'SPECIES', label: '<i>Felis concolor</i> Linnaeus, 1771', taxonomicStatus: 'SYNONYM', acceptedNameUsageID: '4QHKG' };
+const TREE = [
+  { taxonID: 'N', scientificName: 'Animalia', taxonRank: 'KINGDOM', species: 10 },
+  { taxonID: '75F9', scientificName: 'Puma', taxonRank: 'GENUS' },
+  { taxonID: '4QHKG', scientificName: 'Puma concolor', taxonRank: 'SPECIES' }
+];
+const ROUTES = {
+  [`/v2/taxon/${CHECKLIST}/4QHKG`]: PUMA,
+  [`/v2/taxon/${CHECKLIST}/3DXV5`]: FELIS,
+  [`/v2/taxon/tree/${CHECKLIST}/4QHKG`]: TREE,
+  [`/v2/taxon/tree/${CHECKLIST}/3DXV5`]: TREE
+};
+const MATCHES = {
+  'Puma concolor': { usage: { key: '4QHKG' }, diagnostics: { matchType: 'EXACT', confidence: 99 } },
+  'Felis concolor': { usage: { key: '3DXV5', status: 'SYNONYM' }, acceptedUsage: { key: '4QHKG' }, diagnostics: { matchType: 'EXACT', confidence: 95 } },
+  Pumx: { usage: { key: '4QHKG' }, diagnostics: { matchType: 'FUZZY', confidence: 40 } },
+  nothing: { diagnostics: { matchType: 'NONE' } }
+};
 
-  assert.equal(describeMatch({ ...good, diagnostics: { matchType: 'EXACT', confidence: 40 } }).found, false);
-  assert.equal(describeMatch({ ...good, diagnostics: { matchType: 'NONE', confidence: 99 } }).found, false);
-  assert.equal(describeMatch({ diagnostics: { matchType: 'NONE' } }).found, false);
-  assert.deepEqual(describeMatch({ diagnostics: { matchType: 'NONE' } }).classification, []);
-});
-
-test('describeMatch follows synonyms to the accepted taxon', () => {
-  const synonym = {
-    usage: { key: 'S', status: 'SYNONYM' },
-    acceptedUsage: { key: 'A', status: 'ACCEPTED' },
-    diagnostics: { matchType: 'EXACT', confidence: 95 }
+async function withApi(run) {
+  clearCache();
+  const realFetch = globalThis.fetch;
+  const requested = [];
+  globalThis.fetch = async (url) => {
+    const { pathname, searchParams } = new URL(url);
+    requested.push(pathname);
+    const body = pathname === '/v2/species/match' ? MATCHES[searchParams.get('scientificName')] : ROUTES[pathname];
+    return body
+      ? { ok: true, json: async () => body }
+      : { ok: false, status: 404 };
   };
-  const result = describeMatch(synonym);
-  assert.equal(result.isSynonym, true);
-  assert.equal(result.target.key, 'A');
-  assert.equal(result.usage.key, 'S');
+  try {
+    return await run(requested);
+  } finally {
+    globalThis.fetch = realFetch;
+    clearCache();
+  }
+}
+
+const base = { apiBase: 'https://api.test', checklistKey: CHECKLIST };
+
+test('isConfidentMatch only trusts good matches', () => {
+  assert.equal(isConfidentMatch(MATCHES['Puma concolor']), true);
+  assert.equal(isConfidentMatch(MATCHES.Pumx), false, 'low confidence');
+  assert.equal(isConfidentMatch(MATCHES.nothing), false, 'no match');
+  assert.equal(isConfidentMatch({ usage: { key: 'A' }, diagnostics: { matchType: 'NONE', confidence: 99 } }), false);
 });
 
-test('describeMatch for a lookup by key does not require a confidence', () => {
-  assert.equal(describeMatch({ usage: { key: 'A' }, diagnostics: { matchType: 'NONE' } }, { byKey: true }).found, true);
-  assert.equal(describeMatch({ diagnostics: {} }, { byKey: true }).found, false);
+test('normalizeTaxon maps Taxon API fields', () => {
+  const t = normalizeTaxon(PUMA);
+  assert.equal(t.key, '4QHKG');
+  assert.equal(t.rank, 'SPECIES');
+  assert.equal(t.formattedName, '<i>Puma concolor</i> (Linnaeus, 1771)');
+  assert.equal(t.status, 'ACCEPTED');
+});
+
+test('resolveTaxon by key reads details and classification from the Taxon API, not the match API', async () => {
+  await withApi(async (requested) => {
+    const result = await resolveTaxon({ ...base, taxonKey: '4QHKG' });
+    assert.equal(result.found, true);
+    assert.equal(result.target.key, '4QHKG');
+    assert.equal(result.isSynonym, false);
+    assert.deepEqual(result.classification.map((c) => c.key), ['N', '75F9', '4QHKG']);
+    assert.deepEqual([...requested].sort(), [`/v2/taxon/${CHECKLIST}/4QHKG`, `/v2/taxon/tree/${CHECKLIST}/4QHKG`].sort());
+  });
+});
+
+test('resolveTaxon by name matches first, then reads details from the Taxon API', async () => {
+  await withApi(async (requested) => {
+    const result = await resolveTaxon({ ...base, scientificName: 'Puma concolor' });
+    assert.equal(result.found, true);
+    assert.equal(result.target.key, '4QHKG');
+    assert.equal(result.matchType, 'EXACT');
+    assert.equal(requested[0], '/v2/species/match');
+    assert.ok(requested.includes(`/v2/taxon/${CHECKLIST}/4QHKG`));
+  });
+});
+
+test('resolveTaxon refuses low-confidence and missing matches without touching the Taxon API', async () => {
+  await withApi(async (requested) => {
+    for (const name of ['Pumx', 'nothing']) {
+      const result = await resolveTaxon({ ...base, scientificName: name });
+      assert.equal(result.found, false);
+    }
+    assert.deepEqual(requested, ['/v2/species/match', '/v2/species/match']);
+  });
+});
+
+test('resolveTaxon follows a synonym found by name to the accepted taxon', async () => {
+  await withApi(async () => {
+    const result = await resolveTaxon({ ...base, scientificName: 'Felis concolor' });
+    assert.equal(result.isSynonym, true);
+    assert.equal(result.usage.key, '3DXV5');
+    assert.equal(result.target.key, '4QHKG');
+    assert.equal(result.classification.at(-1).key, '4QHKG');
+  });
+});
+
+test('resolveTaxon follows a synonym key to the accepted taxon', async () => {
+  await withApi(async () => {
+    const result = await resolveTaxon({ ...base, taxonKey: '3DXV5' });
+    assert.equal(result.isSynonym, true);
+    assert.equal(result.target.key, '4QHKG');
+  });
+});
+
+test('resolveTaxon reports an unknown key as not found, not as an error', async () => {
+  await withApi(async () => {
+    assert.deepEqual(await resolveTaxon({ ...base, taxonKey: 'ZZZZZ' }), { found: false });
+  });
+});
+
+test('resolveTaxon lets real failures through as errors', async () => {
+  clearCache();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 500 });
+  try {
+    await assert.rejects(resolveTaxon({ ...base, taxonKey: '4QHKG' }), (err) => err.status === 500);
+  } finally {
+    globalThis.fetch = realFetch;
+    clearCache();
+  }
 });
 
 test('resolveConfig: element > configure() > defaults', () => {

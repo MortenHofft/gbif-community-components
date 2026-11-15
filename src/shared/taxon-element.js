@@ -1,6 +1,6 @@
 import { LitElement } from 'lit';
 import { resolveConfig } from './config.js';
-import { matchTaxon } from './match.js';
+import { resolveTaxon } from './taxon.js';
 import { emit } from './events.js';
 import { tokens, cardStyles } from './styles.js';
 
@@ -63,11 +63,11 @@ export class GbifTaxonElement extends LitElement {
 
     this._taxon = { status: 'loading' };
     try {
-      const taxon = await matchTaxon({ ...this.config, taxonKey, scientificName });
+      const taxon = await resolveTaxon({ ...this.config, taxonKey, scientificName });
       if (!isCurrent()) return;
 
       if (!taxon.found) {
-        this._taxon = { status: 'nomatch', query: taxonKey || scientificName };
+        this._taxon = { status: 'nomatch', query: taxonKey || scientificName, byKey: !!taxonKey };
         return;
       }
 

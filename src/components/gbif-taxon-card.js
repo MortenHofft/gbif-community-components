@@ -181,7 +181,9 @@ export class GbifTaxonCard extends GbifTaxonElement {
         return html`<p class="gbif-card__state" role="alert">Could not load this taxon from GBIF.</p>`;
       case 'nomatch':
         return html`<p class="gbif-card__state">
-          No confident match could be found on GBIF for <em>${taxon.query}</em>.
+          ${taxon.byKey
+            ? html`No taxon with key <em>${taxon.query}</em> was found in this checklist.`
+            : html`No confident match could be found on GBIF for <em>${taxon.query}</em>.`}
         </p>`;
       default:
         return html`

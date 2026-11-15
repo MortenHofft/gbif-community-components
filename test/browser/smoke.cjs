@@ -50,6 +50,11 @@ const check = async (label, fn) => {
 
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
+  const gbifRequests = [];
+  page.on('request', (request) => {
+    const url = new globalThis.URL(request.url());
+    if (url.hostname === 'api.gbif.org') gbifRequests.push(url.pathname);
+  });
 
   const card = page.locator('#main-card');
   const gallery = page.locator('gbif-media-gallery');
@@ -110,6 +115,14 @@ const check = async (label, fn) => {
       assert.equal(await map.locator('.gbif-card').count(), 0);
     });
 
+    await check('a synonym resolves to the accepted taxon and says so', async () => {
+      await page.getByRole('button', { name: 'Felis concolor (synonym)' }).click();
+      await card.locator('.gbif-taxon-card__synonym').filter({ hasText: 'Felis concolor' }).waitFor({ timeout: 30000 });
+      assert.match(await card.locator('.gbif-taxon-card__name').innerText(), /^Puma concolor/);
+      await gallery.locator('.gbif-media-gallery__image').waitFor({ timeout: 30000 });
+      assert.match(await gallery.locator('.gbif-media-gallery__image').getAttribute('alt'), /^Image of Puma concolor/);
+    });
+
     await check('the themed card picks up host-page custom properties', async () => {
       const themed = page.locator('.themed gbif-taxon-card');
       await themed.locator('.gbif-taxon-card__name').waitFor({ timeout: 30000 });
@@ -117,6 +130,12 @@ const check = async (label, fn) => {
       assert.equal(badge, 'rgb(138, 75, 8)');
       const title = await themed.locator('.gbif-card__title').innerText();
       assert.equal(title, 'Mountain lion');
+    });
+
+    await check('details come from the Taxon API, never the deprecated Species API', async () => {
+      assert.ok(gbifRequests.some((p) => p.startsWith('/v2/taxon/tree/')), 'classification from /v2/taxon/tree');
+      assert.ok(gbifRequests.some((p) => /^\/v2\/taxon\/[^/]+\/[^/]+$/.test(p)), 'name usage from /v2/taxon');
+      assert.deepEqual(gbifRequests.filter((p) => p.startsWith('/v1/species')), []);
     });
 
     await check('no uncaught page errors', async () => {

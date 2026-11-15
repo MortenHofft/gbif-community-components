@@ -7,13 +7,18 @@ export function escapeHtml(text = '') {
 }
 
 /**
- * GBIF returns scientific names as HTML with italics (`<i>Puma</i> <i>concolor</i>`).
- * That string comes from an external API and is shown on someone else's site,
- * so everything is escaped and only plain `<i>` and `<em>` tags are let back in.
- * Tags with attributes never match and stay escaped.
+ * GBIF returns name labels as HTML with italics and already-encoded entities
+ * (`<i>Puma concolor</i> Whittaker &amp; Margulis`). That string comes from an
+ * external API and is shown on someone else's site, so everything is escaped
+ * and only these are let back in:
+ *   - plain `<i>` and `<em>` tags (tags with attributes never match),
+ *   - the entities `&amp; &lt; &gt; &quot; &#39;`, which decode to text, never markup.
+ * A lone `&` stays escaped.
  */
 export function safeNameHtml(html = '') {
-  return escapeHtml(html).replace(/&lt;(\/?)(i|em)&gt;/gi, '<$1$2>');
+  return escapeHtml(html)
+    .replace(/&lt;(\/?)(i|em)&gt;/gi, '<$1$2>')
+    .replace(/&amp;(amp|lt|gt|quot|#39);/g, '&$1;');
 }
 
 /** Turn a licence URL into a short label and a link. */
