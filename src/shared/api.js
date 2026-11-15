@@ -1,13 +1,19 @@
 /**
  * The one place that talks to the GBIF API.
  *
- * - Identical requests made while one is in flight share a single request.
- * - Successful responses are kept for a short time so repeated lookups (for
- *   example several cards for the same taxon) cost one request.
- * - Failures are never cached.
+ * - Identical requests made at the same time share a single request.
+ * - Successful responses are remembered for the life of the page, so repeated
+ *   lookups (several cards for one taxon, paging back and forth) cost nothing.
+ * - How long a response stays *fresh* is left to the browser's HTTP cache and
+ *   the API's `Cache-Control` headers. This module sets no expiry of its own,
+ *   so a new page load always revalidates according to those headers.
+ * - Failures are never remembered.
+ * - Memory is bounded: past MAX_ENTRIES the oldest responses are dropped, which
+ *   only matters for long-lived pages. A dropped response is simply requested
+ *   again, usually straight from the HTTP cache.
  */
 
-const CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_ENTRIES = 200;
 const cache = new Map();
 
 export class GbifApiError extends Error {
@@ -34,10 +40,10 @@ export function buildUrl(base, path, params = {}) {
   return url.toString();
 }
 
-/** Fetch JSON with in-flight de-duplication and a short-lived cache. */
+/** Fetch JSON, sharing identical in-flight requests and remembering successes. */
 export function getJson(url) {
   const hit = cache.get(url);
-  if (hit && Date.now() - hit.time < CACHE_TTL_MS) return hit.promise;
+  if (hit) return hit;
 
   const promise = fetch(url, { headers: { Accept: 'application/json' } })
     .then((res) => {
@@ -45,12 +51,15 @@ export function getJson(url) {
       return res.json();
     })
     .catch((err) => {
-      cache.delete(url);
+      // Only forget this request, not a newer one that replaced it for the same URL.
+      if (cache.get(url) === promise) cache.delete(url);
       if (err instanceof GbifApiError) throw err;
       throw new GbifApiError(err.message || 'Network error', { url });
     });
 
-  cache.set(url, { time: Date.now(), promise });
+  cache.set(url, promise);
+  // Maps keep insertion order, so the first key is the oldest entry.
+  if (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value);
   return promise;
 }
 

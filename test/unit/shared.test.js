@@ -203,6 +203,44 @@ test('getJson shares in-flight requests, caches successes and never caches failu
   }
 });
 
+test('getJson sets no expiry of its own: a remembered response is reused, whatever its age', async () => {
+  clearCache();
+  const realFetch = globalThis.fetch;
+  const realNow = Date.now;
+  let calls = 0;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ calls: ++calls }) });
+  try {
+    await getJson('https://x.test/fresh');
+    Date.now = () => realNow() + 24 * 60 * 60 * 1000; // a day later
+    await getJson('https://x.test/fresh');
+    assert.equal(calls, 1, 'freshness is the HTTP cache\'s job, not this module\'s');
+  } finally {
+    Date.now = realNow;
+    globalThis.fetch = realFetch;
+    clearCache();
+  }
+});
+
+test('getJson keeps memory bounded by dropping the oldest responses', async () => {
+  clearCache();
+  const realFetch = globalThis.fetch;
+  const calls = new Map();
+  globalThis.fetch = async (url) => {
+    calls.set(url, (calls.get(url) || 0) + 1);
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    for (let i = 0; i < 205; i += 1) await getJson(`https://x.test/${i}`);
+    await getJson('https://x.test/204'); // newest: still remembered
+    await getJson('https://x.test/0'); // oldest: was dropped, requested again
+    assert.equal(calls.get('https://x.test/204'), 1);
+    assert.equal(calls.get('https://x.test/0'), 2);
+  } finally {
+    globalThis.fetch = realFetch;
+    clearCache();
+  }
+});
+
 test('linkIntent fires a cancelable event and respects preventDefault', () => {
   const el = new EventTarget();
   const seen = [];
