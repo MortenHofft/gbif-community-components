@@ -1,10 +1,13 @@
 import { LitElement, css, html } from 'lit';
 import { resolveConfig } from '../shared/config.js';
 import { emit } from '../shared/events.js';
-import { mergeQuery, normalizeQuery, readUrlQuery, sameQuery, toParams, writeUrlQuery } from '../shared/filters.js';
+import { FILTERS, mergeQuery, normalizeQuery, readUrlQuery, sameQuery, toParams, writeUrlQuery } from '../shared/filters.js';
+import { buildPredicate, parsePredicate } from '../shared/predicate.js';
+import { fetchFacets, fetchFacetsByPredicate, searchOccurrences, searchOccurrencesByPredicate } from '../shared/occurrence.js';
+import { GbifApiError } from '../shared/api.js';
 
 const BASE_FILTER_PROPERTIES = ['country', 'year', 'basisOfRecord', 'license', 'hasCoordinate', 'q'];
-const SCOPE_PROPERTIES = ['taxonKey', 'datasetKey', 'checklistKey', 'apiBase', 'siteBase'];
+const SCOPE_PROPERTIES = ['taxonKey', 'datasetKey', 'checklistKey', 'apiBase', 'siteBase', 'predicate'];
 
 /** A key from an attribute: a short plain string, or nothing. */
 const cleanKey = (value) => (typeof value === 'string' && /^[\w.-]{1,64}$/.test(value.trim()) ? value.trim() : undefined);
@@ -24,6 +27,16 @@ const cleanKey = (value) => (typeof value === 'string' && /^[\w.-]{1,64}$/.test(
  *     never written to the URL.
  *   - the visitor's, set through `setFilters()` or by the filter panel.
  *
+ * A page author's subset can also be a `predicate`: GBIF's predicate JSON, which can say what
+ * the plain filters cannot (`or`, `not`, a geometry, a long list of datasets):
+ *
+ *   <gbif-occurrence-search predicate='{"type":"in","key":"DATASET_KEY","values":["…","…"]}'>
+ *
+ * The subset applies in full to everything, and the visitor's filters narrow it further. With a
+ * predicate, requests are sent by POST (see `src/shared/predicate.js`). A predicate that is not valid
+ * is never "ignored": that would show all of GBIF. The components that use the search show an
+ * error and send no request until it is fixed. It comes from the page only, never the address.
+ *
  * `sync-url` keeps the visitor's filters in the page's address, as
  * `?gbif_country=NO&gbif_year=2000,2020`, so a search can be shared and the back
  * button works. The prefix is `url-prefix` (default `gbif_`; use another for a
@@ -31,10 +44,13 @@ const cleanKey = (value) => (typeof value === 'string' && /^[\w.-]{1,64}$/.test(
  * visitor adds a history entry; `url-history="replace"` replaces the current one.
  *
  * Properties: `query` (all filters in force), `userQuery`, `params` (the request
- * parameters), `fixed` (names of the author's filters), `config`.
+ * parameters), `fixed` (names of the author's filters), `config`, `valid`, `predicateError`.
  * Methods: `setFilters(patch)` (a value of `null`, `''` or `[]` removes a filter), `reset()`.
- * Event: `gbif-query-change`, detail `{ query, userQuery, params, source }`, where
- * `source` is `update`, `reset`, `url` or `attributes`.
+ * Event: `gbif-query-change`, detail `{ query, userQuery, params, predicate, source }`, where
+ * `source` is `update`, `reset`, `url` or `attributes`, and `predicate` is everything that narrows
+ * the search as one predicate (free text, `q`, is not part of it) or `null`.
+ *
+ * The components that use a search call its `fetchPage()` and `fetchFacets()`.
  */
 export class GbifOccurrenceSearch extends LitElement {
   static properties = {
@@ -49,6 +65,7 @@ export class GbifOccurrenceSearch extends LitElement {
     license: { type: String },
     hasCoordinate: { type: Boolean, attribute: 'has-coordinate' },
     q: { type: String },
+    predicate: { type: String },
     syncUrl: { type: Boolean, attribute: 'sync-url' },
     urlPrefix: { type: String, attribute: 'url-prefix' },
     urlHistory: { type: String, attribute: 'url-history' }
@@ -69,6 +86,37 @@ export class GbifOccurrenceSearch extends LitElement {
     this._syncing = false;
     this._ready = false;
     this._onPopState = () => this._readUrl('url');
+  }
+
+  /**
+   * The predicate attribute, read. It is read when asked for, not when the element first updates:
+   * a component may ask for a page in the very tick this element is created, and a request built
+   * before the predicate was read would leave the page author's subset out.
+   */
+  get _parsed() {
+    if (this._parsedFor !== this.predicate) {
+      this._parsedFor = this.predicate;
+      this._parsedResult = this.predicate ? parsePredicate(this.predicate) : null;
+    }
+    return this._parsedResult;
+  }
+
+  willUpdate(changed) {
+    if (changed.has('predicate') && this._parsed?.error) {
+      const message = `The predicate is not valid: ${this._parsed.error}.`;
+      console.warn(`[gbif-components] <${this.localName}> ${message}`);
+      emit(this, 'gbif-error', { component: this.localName, url: undefined, status: 0, message });
+    }
+  }
+
+  /** Is the search fit to be asked about? False if a predicate was given and is not valid. */
+  get valid() {
+    return !this._parsed?.error;
+  }
+
+  /** Why the predicate is not valid, or `undefined`. */
+  get predicateError() {
+    return this._parsed?.error;
   }
 
   /** The page author's filters, validated. */
@@ -111,6 +159,60 @@ export class GbifOccurrenceSearch extends LitElement {
     return params;
   }
 
+  /** Everything that narrows the search, as `{ predicate, q }`, leaving out the filters named in `without`. */
+  _build(without = [], mediaType) {
+    const query = Object.fromEntries(Object.entries(this.query).filter(([key]) => !without.includes(key)));
+    const { q, ...filters } = query;
+    return {
+      predicate: buildPredicate({
+        base: this._parsed?.predicate ?? null,
+        taxonKey: cleanKey(this.taxonKey),
+        datasetKey: cleanKey(this.datasetKey),
+        checklistKey: this.config.checklistKey,
+        query: filters,
+        mediaType
+      }),
+      q
+    };
+  }
+
+  _assertValid() {
+    if (!this.valid) throw new GbifApiError(`The predicate is not valid: ${this.predicateError}.`);
+  }
+
+  /**
+   * One page of results. `mediaType` narrows it further (the gallery asks for still images).
+   * Resolves to `{ count, results }`.
+   */
+  async fetchPage({ limit, offset, mediaType }) {
+    this._assertValid();
+    const { apiBase } = this.config;
+    if (!this.predicate) {
+      return searchOccurrences({ apiBase, params: { ...this.params, ...(mediaType ? { mediaType } : {}) }, limit, offset });
+    }
+    return searchOccurrencesByPredicate({ apiBase, ...this._build([], mediaType), limit, offset });
+  }
+
+  /**
+   * Counts for the values of the named filters (`filters`), under the other filters in force, and the
+   * total. A filter's own values are not narrowed by itself, so choosing one value still shows the others.
+   * Resolves to `{ count, facets }`, where `facets` is keyed by the API's facet names.
+   */
+  async fetchFacets({ filters, facetLimit }) {
+    this._assertValid();
+    const { apiBase } = this.config;
+    if (!this.predicate) {
+      return fetchFacets({ apiBase, params: this.params, facets: filters.map((key) => FILTERS[key].facet).filter(Boolean), facetLimit });
+    }
+    return fetchFacetsByPredicate({
+      apiBase,
+      build: (without) => this._build(without),
+      filters,
+      active: new Set(Object.keys(this._userQuery)),
+      facetLimit
+    });
+  }
+
   /** Effective `apiBase`, `siteBase` and `checklistKey`, which the components that use this search follow. */
   get config() {
     return resolveConfig(this);
@@ -136,7 +238,7 @@ export class GbifOccurrenceSearch extends LitElement {
 
   _changed(source) {
     if (this.syncUrl && (source === 'update' || source === 'reset')) this._writeUrl();
-    emit(this, 'gbif-query-change', { query: this.query, userQuery: this._userQuery, params: this.params, source });
+    emit(this, 'gbif-query-change', { query: this.query, userQuery: this._userQuery, params: this.params, predicate: this._build().predicate, source });
   }
 
   /* ---------- the page address ---------- */

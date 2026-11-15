@@ -363,7 +363,7 @@ test('a request that never answers ends in a timeout error, which is not remembe
   }
 });
 
-test('a 429 or 503 is tried once more; other failures, and a second failure, are not', async () => {
+test('a 429 or 503 is tried again, up to twice; other failures are not', async () => {
   clearCache();
   const realFetch = globalThis.fetch;
   setRetryDelay(5);
@@ -381,15 +381,16 @@ test('a 429 or 503 is tried once more; other failures, and a second failure, are
   try {
     assert.deepEqual(await run([429, 200]), { data: { ok: 2 }, calls: 2 }, '429 then success');
     assert.deepEqual(await run([503, 200]), { data: { ok: 2 }, calls: 2 }, '503 then success');
-    const twice = await run([429, 429, 200]);
-    assert.equal(twice.calls, 2, 'only one retry');
-    assert.equal(twice.error.status, 429);
+    assert.deepEqual(await run([429, 429, 200]), { data: { ok: 3 }, calls: 3 }, 'two turned away, the third gets through');
+    const thrice = await run([429, 429, 429, 200]);
+    assert.equal(thrice.calls, 3, 'one try and two retries, no more');
+    assert.equal(thrice.error.status, 429);
     const missing = await run([404, 200]);
     assert.equal(missing.calls, 1, 'a 404 is not retried');
     assert.equal(missing.error.status, 404);
     assert.equal((await run([500, 200])).calls, 1, 'a 500 is not retried');
 
-    // No answer a browser can read (a dropped connection, or a 429 without CORS headers): once more.
+    // No answer a browser can read (a dropped connection, or a 429 without CORS headers): tried again.
     let calls = 0;
     globalThis.fetch = async () => {
       calls += 1;
@@ -413,6 +414,54 @@ test('a 429 or 503 is tried once more; other failures, and a second failure, are
     setRequestTimeout(15000);
   } finally {
     setRetryDelay(1200);
+    globalThis.fetch = realFetch;
+    clearCache();
+  }
+});
+
+test('at most four requests are in flight at once, and all of them are answered', async () => {
+  clearCache();
+  const realFetch = globalThis.fetch;
+  let inFlight = 0;
+  let peak = 0;
+  globalThis.fetch = async () => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    inFlight -= 1;
+    return { ok: true, headers: { get: () => null }, json: async () => ({ ok: true }) };
+  };
+  try {
+    const answers = await Promise.all(Array.from({ length: 20 }, (_, i) => getJson(`https://x.test/burst-${i}`)));
+    assert.equal(answers.length, 20);
+    assert.ok(answers.every((a) => a.ok));
+    assert.equal(peak, 4, `peak was ${peak}`);
+  } finally {
+    globalThis.fetch = realFetch;
+    clearCache();
+  }
+});
+
+test('waiting for a turn does not count against a request\'s time limit', async () => {
+  clearCache();
+  const realFetch = globalThis.fetch;
+  setRequestTimeout(60);
+  globalThis.fetch = (url, { signal }) =>
+    // Like a real fetch, it gives up when told to.
+    new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve({ ok: true, headers: { get: () => null }, json: async () => ({ ok: true }) }), 40);
+      signal.addEventListener('abort', () => {
+        clearTimeout(timer);
+        reject(new DOMException('aborted', 'AbortError'));
+      });
+    });
+  try {
+    // Twelve requests of 40 ms through four turns take about 120 ms, so the last ones wait well over
+    // the 60 ms limit. If the clock started when they were asked for, they would time out.
+    const answers = await Promise.all(Array.from({ length: 12 }, (_, i) => getJson(`https://x.test/queued-${i}`)));
+    assert.equal(answers.length, 12);
+  } finally {
+    setRequestTimeout(15000);
     globalThis.fetch = realFetch;
     clearCache();
   }

@@ -3,7 +3,7 @@ import { GbifSearchConsumer } from '../shared/search-consumer.js';
 import { linkIntent, emit } from '../shared/events.js';
 import { clampInt } from '../shared/format.js';
 import { occurrenceUrl } from '../shared/links.js';
-import { COLUMNS, MAX_RESULTS, cellText, parseColumns, searchOccurrences } from '../shared/occurrence.js';
+import { COLUMNS, MAX_RESULTS, cellText, parseColumns } from '../shared/occurrence.js';
 
 /**
  * <gbif-occurrence-table search="#s"></gbif-occurrence-table>
@@ -129,16 +129,18 @@ export class GbifOccurrenceTable extends GbifSearchConsumer {
   /** `paging`: moving within the same search. A failure then keeps the page on screen; a failed new search does not. */
   async _load(page, { paging = false } = {}) {
     const run = ++this._run;
+    if (!this.searchEl.valid) {
+      // Nothing is asked: an invalid predicate must never turn into a request for everything.
+      this._rows = [];
+      this._status = 'invalid';
+      this._loading = false;
+      return;
+    }
     this._status = this._status === 'ready' ? 'ready' : 'loading';
     this._pageError = false;
     this._loading = true;
     try {
-      const { count, results } = await searchOccurrences({
-        apiBase: this.config.apiBase,
-        params: this.searchEl.params,
-        limit: this._size,
-        offset: page * this._size
-      });
+      const { count, results } = await this.searchEl.fetchPage({ limit: this._size, offset: page * this._size });
       if (run !== this._run) return;
       this._rows = results;
       this._total = count;
@@ -150,7 +152,7 @@ export class GbifOccurrenceTable extends GbifSearchConsumer {
       if (paging && this._status === 'ready') this._pageError = true;
       else {
         this._status = 'error';
-        _rows = [];
+        this._rows = [];
       }
       emit(this, 'gbif-error', { component: this.localName, url: error.url, status: error.status ?? 0, message: error.message });
     } finally {
@@ -220,10 +222,8 @@ export class GbifOccurrenceTable extends GbifSearchConsumer {
   }
 
   render() {
-    if (this._searchStatus === 'missing') {
-      return html`<p class="gbif-card__state" role="alert">No occurrence search was found for this component.</p>`;
-    }
-    if (this._searchStatus !== 'bound') return nothing;
+    const problem = this.renderSearchProblem();
+    if (problem) return problem;
     return html`
       <section class="gbif-card" part="card" aria-busy=${this._loading ? 'true' : 'false'}>
         <header class="gbif-card__header" part="header">

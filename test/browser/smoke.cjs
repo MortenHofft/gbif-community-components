@@ -16,6 +16,7 @@ const { chromium } = require('playwright');
 
 const PORT = 5199;
 const URL = `http://127.0.0.1:${PORT}/examples/index.html`;
+const SEARCH_URL = `http://127.0.0.1:${PORT}/examples/search.html`;
 const SHOTS = process.env.SCREENSHOT_DIR || os.tmpdir();
 
 async function startServer() {
@@ -34,6 +35,8 @@ async function startServer() {
   });
   return server;
 }
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let step = 0;
 const check = async (label, fn) => {
@@ -132,7 +135,28 @@ const check = async (label, fn) => {
       assert.equal(title, 'Mountain lion');
     });
 
-    await check('one search drives the filter panel, the table, the gallery and the address', async () => {
+    // The search components have their own example page, so that each page makes a reasonable number of requests.
+    // The live API limits clients by volume over time, and the checks above have used a good deal of it, so wait
+    // a little before the next page (SMOKE_PAUSE_MS=0 to skip).
+    await sleep(Number(process.env.SMOKE_PAUSE_MS ?? 45000));
+    await page.goto(SEARCH_URL);
+
+    // A check on this page that fails is tried again from a fresh load after a pause: when the API's limit has been
+    // reached, components show an error until it recovers, which is the right behaviour but not a failure of the code.
+    const liveRetry = async (fn, tries = 3) => {
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          return await fn();
+        } catch (error) {
+          if (attempt >= tries) throw error;
+          console.log(`  (attempt ${attempt} failed: ${String(error.message).split('\n')[0]}; trying again from a fresh load)`);
+          await sleep(Number(process.env.SMOKE_PAUSE_MS ?? 45000));
+          await page.goto(SEARCH_URL);
+        }
+      }
+    };
+
+    await check('one search drives the filter panel, the table, the gallery and the address', () => liveRetry(async () => {
       const table = page.locator('gbif-occurrence-table');
       const images = page.locator('gbif-occurrence-gallery');
       await table.locator('tbody tr').first().waitFor({ timeout: 60000 });
@@ -156,7 +180,36 @@ const check = async (label, fn) => {
         null,
         { timeout: 60000 }
       );
-    });
+    }));
+
+    await check('a subset given as a predicate matches the plain search, and keeps the other countries listed', () => liveRetry(async () => {
+      const panel = page.locator('gbif-occurrence-filters[search="#subset"]');
+      const subsetTable = page.locator('gbif-occurrence-table[search="#subset"]');
+      const key = '7ddf754f-d193-4cc9-b351-99906754a03b';
+      await subsetTable.locator('tbody tr').first().waitFor({ timeout: 60000 });
+      await panel.locator('.gbif-occurrence-filters__option', { hasText: 'Argentina' }).first().waitFor({ timeout: 60000 });
+      const live = (query) =>
+        page.evaluate(async (q) => (await (await fetch(`https://api.gbif.org/v1/occurrence/search?taxonKey=4QHKG&checklistKey=${q.key}&limit=0${q.query}`)).json()).count, { key, query });
+      const shown = async (locator) => Number((await locator.first().innerText()).replace(/[^\d]/g, '').match(/^\d+/)[0]);
+
+      // The panel's total is the plain search's count for the same subset.
+      const both = await live('&country=AR&country=CL');
+      await page.waitForFunction((n) => document.querySelector('gbif-occurrence-filters[search="#subset"]').shadowRoot.querySelector('.gbif-occurrence-filters__total')?.textContent.replace(/,/g, '').includes(String(n)), both, { timeout: 60000 });
+      assert.equal(await shown(panel.locator('.gbif-occurrence-filters__total')), both);
+      const countries = await panel.locator('fieldset', { hasText: 'Country' }).first().locator('.gbif-occurrence-filters__option-label').allInnerTexts();
+      assert.deepEqual(countries.sort(), ['Argentina', 'Chile'], 'only what the subset leaves');
+
+      // Choosing Argentina narrows the table, and Chile stays listed, with its own count.
+      await panel.locator('.gbif-occurrence-filters__option', { hasText: 'Argentina' }).first().locator('input').check();
+      const argentina = await live('&country=AR');
+      const chile = await live('&country=CL');
+      await page.waitForFunction((n) => document.querySelector('gbif-occurrence-table[search="#subset"]').shadowRoot.querySelector('.gbif-occurrence-table__summary')?.textContent.replace(/,/g, '').includes(String(n)), argentina, { timeout: 60000 });
+      await page.waitForFunction(
+        (n) => [...document.querySelector('gbif-occurrence-filters[search="#subset"]').shadowRoot.querySelectorAll('.gbif-occurrence-filters__option')].some((o) => o.textContent.includes('Chile') && o.textContent.replace(/,/g, '').includes(String(n))),
+        chile,
+        { timeout: 60000 }
+      );
+    }));
 
     await check('details come from the Taxon API, never the deprecated Species API', async () => {
       assert.ok(gbifRequests.some((p) => p.startsWith('/v2/taxon/tree/')), 'classification from /v2/taxon/tree');

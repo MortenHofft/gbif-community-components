@@ -1,7 +1,7 @@
-import { buildUrl, getJson } from './api.js';
+import { buildUrl, getJson, postJson } from './api.js';
 import { md5 } from './md5.js';
 import { formatLicense, safeHttpUrl } from './format.js';
-import { RECORD_LICENSES } from './filters.js';
+import { FILTERS, RECORD_LICENSES } from './filters.js';
 
 /**
  * Occurrence search: the requests behind the filter panel, the table and the
@@ -51,6 +51,70 @@ export async function fetchFacets({ apiBase, params, facets, facetLimit = 15 }) 
       .map((c) => ({ name: c.name, count: c.count }));
   }
   return { count: typeof data?.count === 'number' ? data.count : 0, facets: byField };
+}
+
+/* ---------- the same questions, asked with a predicate ---------- */
+
+const PREDICATE_URL = '/v1/occurrence/search/predicate';
+
+function pageFrom(data) {
+  return {
+    count: typeof data?.count === 'number' ? data.count : 0,
+    results: (Array.isArray(data?.results) ? data.results : []).filter((row) => row && typeof row === 'object')
+  };
+}
+
+/**
+ * One page of results for a predicate (`q`, if there is one, goes beside it). Never sent without a
+ * predicate: the API would answer with everything it has.
+ */
+export async function searchOccurrencesByPredicate({ apiBase, predicate, q, limit, offset }) {
+  if (!predicate) throw new Error('A predicate search needs a predicate.');
+  const allowed = Math.max(0, Math.min(limit, MAX_RESULTS - offset));
+  const body = { limit: allowed, offset, predicate, ...(q ? { q } : {}) };
+  return pageFrom(await postJson(buildUrl(apiBase, PREDICATE_URL), body));
+}
+
+/**
+ * Counts for the values of some filters, like `fetchFacets`, but for a predicate search. There
+ * `facetMultiselect` has no effect: a facet is narrowed by every part of the predicate, its own
+ * filter's included. So a facet whose filter the visitor has set is asked for in a request that
+ * leaves that filter out, and the others share one request with the total. The page author's
+ * subset is part of every request, so it always applies in full.
+ *
+ * `build(without)` gives `{ predicate, q }` for the filters in force except those named.
+ * `filters` are the filter names to count, and `active` the ones the visitor has set.
+ */
+export async function fetchFacetsByPredicate({ apiBase, build, filters, active, facetLimit = 15 }) {
+  const url = buildUrl(apiBase, PREDICATE_URL);
+  const asked = filters.filter((key) => FILTERS[key]?.facet);
+  const own = asked.filter((key) => active.has(key));
+  const shared = asked.filter((key) => !active.has(key));
+
+  const ask = (without, keys) => {
+    const { predicate, q } = build(without);
+    if (!predicate) throw new Error('A predicate search needs a predicate.');
+    return postJson(url, {
+      limit: 0,
+      predicate,
+      ...(q ? { q } : {}),
+      ...(keys.length ? { facets: keys.map((key) => FILTERS[key].facet), facetLimit, facetMincount: 1, facetMultiselect: false } : {})
+    });
+  };
+
+  // The first request has the filters in force, so its count is the total. It also carries the
+  // facets of filters that are not set. Each facet of a filter that is set gets its own request.
+  const answers = await Promise.all([ask([], shared), ...own.map((key) => ask([key], [key]))]);
+  const byField = {};
+  for (const data of answers) {
+    for (const facet of Array.isArray(data?.facets) ? data.facets : []) {
+      if (!facet || typeof facet.field !== 'string') continue;
+      byField[facet.field] = (Array.isArray(facet.counts) ? facet.counts : [])
+        .filter((c) => c && typeof c.name === 'string' && typeof c.count === 'number')
+        .map((c) => ({ name: c.name, count: c.count }));
+    }
+  }
+  return { count: typeof answers[0]?.count === 'number' ? answers[0].count : 0, facets: byField };
 }
 
 /** `HUMAN_OBSERVATION` -> `Human observation` */

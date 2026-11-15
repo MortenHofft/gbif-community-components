@@ -22,8 +22,6 @@
       .picker button { padding: 0.35rem 0.8rem; border: 1px solid #d5dbe1; border-radius: 999px; background: #fff; font: inherit; cursor: pointer; }
       .picker button:hover { background: #f2f4f7; }
       #event-log { max-height: 12rem; margin: 0; padding: 0.75rem; overflow: auto; border-radius: 6px; background: #101418; color: #d1e7d1; font-size: 0.75rem; }
-      .search-layout { display: grid; gap: 1rem; grid-template-columns: 17rem 1fr; align-items: start; }
-      @media (max-width: 52rem) { .search-layout { grid-template-columns: 1fr; } }
       code { background: #f2f4f7; padding: 0.05rem 0.3rem; border-radius: 3px; }
 
       /* Theming from the host page: only CSS custom properties are needed. */
@@ -73,6 +71,11 @@
     <h3>Events seen on this page</h3>
     <pre id="event-log" aria-live="polite"></pre>
 
+    <p class="lede">
+      Searching occurrences (a filter panel, table and image gallery that share one search, a subset given as a
+      predicate) is on <a href="search.html">its own page</a>.
+    </p>
+
     <h2>2. Themed from the host page</h2>
     <p class="lede">Same component, restyled with a few <code>--gbif-*</code> custom properties.</p>
     <div class="themed">
@@ -92,22 +95,6 @@
     <footer style="margin-top: 1.5rem; padding-top: 0.75rem; border-top: 1px solid #d5dbe1">
       <gbif-attribution>Example Museum is not affiliated with GBIF.</gbif-attribution>
     </footer>
-
-    <h2>4. One search, three views</h2>
-    <p class="lede">
-      <code>&lt;gbif-occurrence-search&gt;</code> holds the filters and draws nothing. The filter panel, table and
-      image gallery follow it and never talk to each other. Choose a country or a year range and all three change. With
-      <code>sync-url</code> the filters are kept in the address (<code>?gbif_country=…</code>), so a search can be
-      shared and the back button works.
-    </p>
-    <gbif-occurrence-search id="search" taxon-key="4QHKG" sync-url></gbif-occurrence-search>
-    <div class="search-layout">
-      <gbif-occurrence-filters search="#search"></gbif-occurrence-filters>
-      <div class="stack">
-        <gbif-occurrence-table search="#search" page-size="8"></gbif-occurrence-table>
-        <gbif-occurrence-gallery search="#search" page-size="8"></gbif-occurrence-gallery>
-      </div>
-    </div>
 
     <script type="module">
       const card = document.querySelector('#main-card');

@@ -118,6 +118,37 @@ function matchesQuery(rec, q, skip) {
   return true;
 }
 
+/** Evaluating a predicate over the stub's records, as GBIF's predicate search does (for the types used here). */
+const PREDICATE_KEYS = {
+  COUNTRY: (r) => r.countryCode,
+  BASIS_OF_RECORD: (r) => r.basisOfRecord,
+  LICENSE: (r) => r._license,
+  YEAR: (r) => r.year,
+  HAS_COORDINATE: (r) => String(r._hasCoordinate),
+  MEDIA_TYPE: (r) => (r.media.length ? 'StillImage' : null),
+  DATASET_KEY: (r) => r.datasetName
+};
+function evalPredicate(p, r) {
+  const value = (key) => {
+    if (!PREDICATE_KEYS[key]) throw new Error(`${key} is not a predicate key`);
+    return PREDICATE_KEYS[key](r);
+  };
+  switch (p.type) {
+    case 'and': return p.predicates.every((c) => evalPredicate(c, r));
+    case 'or': return p.predicates.some((c) => evalPredicate(c, r));
+    case 'not': return !evalPredicate(p.predicate, r);
+    case 'equals': return p.key === 'TAXON_KEY' ? true : String(value(p.key)) === String(p.value);
+    case 'in': return p.values.map(String).includes(String(value(p.key)));
+    case 'greaterThanOrEquals': return Number(value(p.key)) >= Number(p.value);
+    case 'lessThanOrEquals': return Number(value(p.key)) <= Number(p.value);
+    case 'greaterThan': return Number(value(p.key)) > Number(p.value);
+    case 'lessThan': return Number(value(p.key)) < Number(p.value);
+    case 'isNotNull': return value(p.parameter) !== null && value(p.parameter) !== undefined;
+    default: throw new Error(`predicate type ${p.type} is not handled by this stub`);
+  }
+}
+const FACET_PICK = { COUNTRY: (r) => r.countryCode, BASIS_OF_RECORD: (r) => r.basisOfRecord, LICENSE: (r) => r._license };
+
 function freshState() {
   return {
     records: makeRecords(),
@@ -165,11 +196,47 @@ async function installStubs(page, S) {
     return json(route, { count: matching.length, results: matching.slice(offset, offset + limit).map(strip), facets });
   };
 
+  const predicateSearch = async (route, body) => {
+    if (S.searchHook) {
+      const hooked = await S.searchHook(new URLSearchParams(), body);
+      if (hooked?.delay) await sleep(hooked.delay);
+      if (hooked?.status) return route.fulfill({ headers: { 'access-control-allow-origin': '*' }, status: hooked.status, body: hooked.body ?? 'error' });
+    }
+    const offset = Number(body?.offset ?? 0);
+    const limit = Number(body?.limit ?? 20);
+    if (offset + limit > 100001) return route.fulfill({ headers: { 'access-control-allow-origin': '*' }, status: 400, body: `Max offset of 100001 exceeded: ${offset} + ${limit}` });
+    let matching;
+    try {
+      // The real API answers a request WITHOUT a predicate with everything it has.
+      const text = body?.q ? String(body.q).toLowerCase() : null;
+      matching = S.records.filter((r) => (body?.predicate ? evalPredicate(body.predicate, r) : true) && (!text || `${r.scientificName} ${r.recordedBy}`.toLowerCase().includes(text)));
+      if (!body?.predicate) (page.everythingRequests ??= []).push(body);
+    } catch (error) {
+      return route.fulfill({ headers: { 'access-control-allow-origin': '*' }, status: 400, body: error.message });
+    }
+    // facetMultiselect does nothing here: a facet is narrowed by the whole predicate.
+    const facets = (body?.facets ?? []).map((field) => {
+      const counts = new Map();
+      for (const r of matching) counts.set(FACET_PICK[field](r), (counts.get(FACET_PICK[field](r)) ?? 0) + 1);
+      const sorted = [...counts].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0]))).slice(0, Number(body.facetLimit || 10));
+      return { field, counts: sorted.map(([name, count]) => ({ name, count })) };
+    });
+    const strip = ({ _license, _hasCoordinate, ...rest }) => rest;
+    return route.fulfill({ status: 201, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ count: matching.length, results: matching.slice(offset, offset + limit).map(strip), facets }) });
+  };
+
   const api = async (route) => {
     const url = new URL(route.request().url());
     const p = url.pathname.replace(/^\/gbif-proxy/, '');
     const q = url.searchParams;
-    requests.push({ host: url.hostname, path: p, query: Object.fromEntries(q), full: url.href });
+    const method = route.request().method();
+    if (method === 'OPTIONS') {
+      // The browser's CORS preflight for a JSON POST: GBIF allows it.
+      return route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'HEAD,GET,POST,DELETE,PUT,OPTIONS', 'access-control-allow-headers': 'content-type' } });
+    }
+    let body;
+    try { body = route.request().postDataJSON(); } catch { body = undefined; }
+    requests.push({ host: url.hostname, path: p, query: Object.fromEntries(q), full: url.href, method, body });
 
     if (p === '/v2/species/match') {
       const m = MATCHES[q.get('scientificName')];
@@ -183,6 +250,7 @@ async function installStubs(page, S) {
       if (S.hangDetail) return; // never answers
       return TAXA[m[1]] ? json(route, TAXA[m[1]]) : route.fulfill({ headers: { 'access-control-allow-origin': '*' }, status: 404, body: 'Taxon does not exist' });
     }
+    if (p === '/v1/occurrence/search/predicate' && method === 'POST') return predicateSearch(route, body);
     if (p === '/v1/occurrence/search') {
       if (q.has('typeStatus')) {
         const offset = Number(q.get('offset') || 0);
@@ -1044,7 +1112,7 @@ async function run() {
     assert.equal(facetReqs(page).at(-1).get('taxonKey'), 'OTHER');
     assert.equal(galleryReqs(page).at(-1).get('taxonKey'), 'OTHER');
     const detail = (await page.events('gbif-query-change')).at(-1).detail;
-    assert.deepEqual(Object.keys(detail).sort(), ['params', 'query', 'source', 'userQuery']);
+    assert.deepEqual(Object.keys(detail).sort(), ['params', 'predicate', 'query', 'source', 'userQuery']);
   });
 
   await test('search: a 429 is tried again, and a real failure is shown where it happened', async (make) => {
@@ -1059,8 +1127,14 @@ async function run() {
     S.searchHook = async (q) => (!q.has('facet') ? { status: 500 } : undefined);
     await checkbox(page, 'Norway').check();
     await page.locator('gbif-occurrence-table [role=alert]', { hasText: 'Could not load occurrences' }).waitFor(T);
-    await page.locator('gbif-occurrence-gallery [role=alert], gbif-occurrence-gallery .gbif-card__state').first().waitFor(T);
+    await page.locator('gbif-occurrence-gallery [role=alert]', { hasText: 'Could not load images' }).waitFor(T);
     assert.ok(await checkbox(page, 'Norway').isEnabled(), 'the panel still works');
+    assert.equal(await page.locator('gbif-occurrence-table tbody tr').count(), 0, 'rows from the old filters are not left under an error');
+    assert.equal(await page.locator('gbif-occurrence-gallery .gbif-occurrence-gallery__tile').count(), 0);
+    // A failed new search is reported to the page, and is not a crash.
+    const failures = (await page.events('gbif-error')).filter((e) => e.detail.status === 500).map((e) => e.tag);
+    assert.ok(failures.includes('gbif-occurrence-table') && failures.includes('gbif-occurrence-gallery'), failures.join());
+    assert.deepEqual(page.errors, [], 'no uncaught errors');
     S.searchHook = null;
     await checkbox(page, 'Norway').uncheck();
     await page.locator('gbif-occurrence-table tbody tr').first().waitFor(T);
@@ -1168,12 +1242,18 @@ async function run() {
         <gbif-occurrence-table id="inside" page-size="3"></gbif-occurrence-table>
       </gbif-occurrence-search>
       <gbif-occurrence-table id="missing" search="#nope"></gbif-occurrence-table>
-      <gbif-occurrence-table id="bad" search="##??"></gbif-occurrence-table>`);
+      <gbif-occurrence-table id="bad" search="##??"></gbif-occurrence-table>
+      <div id="notasearch"></div>
+      <gbif-occurrence-table id="wrongtype" search="#notasearch"></gbif-occurrence-table>`);
     await page.locator('#byId tbody tr').first().waitFor(T);
     await page.locator('#inside tbody tr').first().waitFor(T);
     assert.deepEqual([...new Set(await page.locator('#inside tbody tr td:nth-child(2)').allTextContents())], ['Norway'], 'the one it is inside');
     await page.locator('#missing [role=alert]', { hasText: 'No occurrence search was found' }).waitFor(T);
     await page.locator('#bad [role=alert]', { hasText: 'No occurrence search was found' }).waitFor(T);
+    await page.locator('#wrongtype [role=alert]', { hasText: 'No occurrence search was found' }).waitFor(T);
+    assert.ok(page.warnings.some((w) => /matched <div>, which is not a <gbif-occurrence-search>/.test(w)), page.warnings.join('|'));
+    // A table written before its search is asked about the search's own filters, not about everything.
+    assert.ok(tableReqs(page).length >= 2 && tableReqs(page).every((p) => p.get('taxonKey') === '4QHKG'), 'every table request has the search\'s taxon');
     assert.ok(page.warnings.some((w) => /found no <gbif-occurrence-search>/.test(w) && /#nope/.test(w)), page.warnings.join('|'));
 
     await page.evaluate(() => {
@@ -1262,6 +1342,196 @@ async function run() {
     // Panel, table and gallery are three different questions (counts and values, rows, images), so three requests.
     assert.equal(facetReqs(page).length, 1);
     assert.equal(tableReqs(page).length + galleryReqs(page).length, 2);
+  });
+
+  /* ---------- A subset given as a predicate ---------- */
+
+  const SUBSET = { type: 'in', key: 'COUNTRY', values: ['NO', 'SE'] };
+  const withPredicate = (predicate, extra = '') => ALL_VIEWS(`predicate='${typeof predicate === 'string' ? predicate : JSON.stringify(predicate)}' ${extra}`);
+  const posts = (page) => page.requests.filter((r) => r.path === '/v1/occurrence/search/predicate' && r.method === 'POST').map((r) => r.body);
+  const hasPart = (body, type, key) => JSON.stringify(body.predicate).includes(`"type":"${type}","key":"${key}"`);
+  const countryCells = (page) => page.locator('gbif-occurrence-table tbody tr td:nth-child(2)').allTextContents().then((c) => [...new Set(c)].sort());
+
+  await test('predicate: the subset applies in full to the table, the gallery and the panel\'s own counts', async (make) => {
+    const S = freshState();
+    const page = await make(S);
+    await page.mount(withPredicate(SUBSET));
+    await page.locator('gbif-occurrence-table tbody tr').first().waitFor(T);
+    await checkbox(page, 'Norway').waitFor(T);
+    await waitTotal(page, expectedTotal(S, (r) => ['NO', 'SE'].includes(r.countryCode)));
+    assert.deepEqual(await countryCells(page), ['Norway', 'Sweden']);
+    assert.equal(await total(page, 'gbif-occurrence-filters .gbif-occurrence-filters__total'), '30 occurrences');
+    const countries = await page.locator('gbif-occurrence-filters fieldset', { hasText: 'Country' }).first().locator('.gbif-occurrence-filters__option-label').allTextContents();
+    assert.deepEqual(countries.sort(), ['Norway', 'Sweden'], 'the panel only lists what the subset leaves');
+    await page.waitForFunction(() => document.querySelector('gbif-occurrence-gallery').shadowRoot.textContent.includes('10 occurrences with images'), null, T);
+    // The subset is in every request, the plain GET search is not used, and nothing was sent without a predicate.
+    assert.ok(posts(page).length >= 3 && posts(page).every((b) => JSON.stringify(b.predicate).includes('"values":["NO","SE"]')));
+    assert.equal(searches(page).length, 0);
+    assert.deepEqual(page.everythingRequests ?? [], []);
+    assert.deepEqual(page.errors, []);
+  });
+
+  await test('predicate: choosing a country leaves the other values listed, by leaving that filter out of its own counts', async (make) => {
+    const S = freshState();
+    const page = await make(S);
+    await page.mount(withPredicate(SUBSET));
+    await checkbox(page, 'Norway').waitFor(T);
+    await checkbox(page, 'Norway').check();
+    await waitTotal(page, 15);
+    assert.deepEqual(await countryCells(page), ['Norway']);
+    // Sweden is still offered, with the count it has on its own, but Chile is not: the subset is still in force.
+    const row = async (name) => page.locator('gbif-occurrence-filters .gbif-occurrence-filters__option', { hasText: name }).first().textContent().catch(() => null);
+    await page.waitForFunction(() => /Sweden\s*15/.test(document.querySelector('gbif-occurrence-filters').shadowRoot.textContent), null, T);
+    assert.equal(await page.locator('gbif-occurrence-filters .gbif-occurrence-filters__option', { hasText: 'Chile' }).count(), 0);
+    assert.ok((await row('Norway')).includes('15'));
+
+    const own = posts(page).filter((b) => b.facets?.length === 1 && b.facets[0] === 'COUNTRY').at(-1);
+    assert.ok(own, 'country has a request of its own');
+    assert.ok(hasPart(own, 'in', 'COUNTRY') && !hasPart(own, 'equals', 'COUNTRY'), 'it has the subset but not the visitor\'s Norway');
+    const shared = posts(page).filter((b) => b.facets && !b.facets.includes('COUNTRY')).at(-1);
+    assert.ok(hasPart(shared, 'equals', 'COUNTRY'), 'the others are counted with the visitor\'s Norway');
+    assert.deepEqual(shared.facets.sort(), ['BASIS_OF_RECORD', 'LICENSE']);
+
+    await checkbox(page, 'Sweden').check();
+    await waitTotal(page, 30);
+    assert.deepEqual(page.badRequests ?? [], []);
+  });
+
+  await test('predicate: the visitor\'s filters narrow the subset, and free text goes beside the predicate', async (make) => {
+    const S = freshState();
+    const page = await make(S);
+    await page.mount(withPredicate(SUBSET));
+    await page.locator('gbif-occurrence-filters input[name=year-from]').waitFor(T);
+    await page.locator('gbif-occurrence-filters input[name=year-from]').fill('2000');
+    await page.locator('gbif-occurrence-filters input[name=year-to]').fill('2010');
+    await page.locator('gbif-occurrence-filters input[name=year-to]').blur();
+    const inSubset = (r) => ['NO', 'SE'].includes(r.countryCode);
+    await waitTotal(page, expectedTotal(S, (r) => inSubset(r) && r.year >= 2000 && r.year <= 2010));
+    await checkbox(page, 'Only records with coordinates').check();
+    await waitTotal(page, expectedTotal(S, (r) => inSubset(r) && r.year >= 2000 && r.year <= 2010 && r._hasCoordinate));
+    await page.locator('gbif-occurrence-filters input[type=search]').fill('collector 1');
+    await page.locator('gbif-occurrence-filters input[type=search]').press('Enter');
+    await waitTotal(page, expectedTotal(S, (r) => inSubset(r) && r.year >= 2000 && r.year <= 2010 && r._hasCoordinate && `${r.scientificName} ${r.recordedBy}`.toLowerCase().includes('collector 1')));
+    const last = posts(page).filter((b) => b.limit > 0 && !b.predicate?.predicates?.some?.((p) => p.key === 'MEDIA_TYPE')).at(-1);
+    assert.equal(last.q, 'collector 1', 'free text is beside the predicate');
+    assert.ok(!JSON.stringify(last.predicate).includes('fullTextSearch'));
+    assert.ok(hasPart(last, 'greaterThanOrEquals', 'YEAR') && hasPart(last, 'lessThanOrEquals', 'YEAR') && hasPart(last, 'equals', 'HAS_COORDINATE'));
+    assert.deepEqual(page.badRequests ?? [], []);
+  });
+
+  await test('predicate: a subset gives the same answers as the same subset set as plain filters', async (make) => {
+    const page = await make();
+    await page.mount(`
+      <gbif-occurrence-search id="plain" taxon-key="4QHKG" country="NO" year="2000,*"></gbif-occurrence-search>
+      <gbif-occurrence-search id="pred" taxon-key="4QHKG" predicate='{"type":"and","predicates":[{"type":"equals","key":"COUNTRY","value":"NO"},{"type":"greaterThanOrEquals","key":"YEAR","value":"2000"}]}'></gbif-occurrence-search>
+      <gbif-occurrence-table id="a" search="#plain" page-size="50"></gbif-occurrence-table>
+      <gbif-occurrence-table id="b" search="#pred" page-size="50"></gbif-occurrence-table>
+      <gbif-occurrence-gallery id="ga" search="#plain" page-size="50"></gbif-occurrence-gallery>
+      <gbif-occurrence-gallery id="gb" search="#pred" page-size="50"></gbif-occurrence-gallery>`);
+    for (const id of ['a', 'b']) await page.locator(`#${id} tbody tr`).first().waitFor(T);
+    const rows = (id) => page.locator(`#${id} tbody tr`).allTextContents();
+    assert.deepEqual(await rows('b'), await rows('a'));
+    await page.locator('#ga .gbif-occurrence-gallery__tile').first().waitFor(T);
+    await page.locator('#gb .gbif-occurrence-gallery__tile').first().waitFor(T);
+    assert.deepEqual(await page.locator('#gb .gbif-occurrence-gallery__caption').allTextContents(), await page.locator('#ga .gbif-occurrence-gallery__caption').allTextContents());
+  });
+
+  await test('predicate: one that is not valid is shown as an error and NEVER becomes a request for everything', async (make) => {
+    const page = await make();
+    const bad = ['{not json', '{"type":"banana"}', '{"type":"and","predicates":[]}', '{"type":"equals","key":"COUNTRY"}', '{"type":"in","key":"COUNTRY","values":[]}', '[]'];
+    for (const predicate of bad) {
+      await page.mount(withPredicate(predicate.replace(/'/g, '&#39;')));
+      await page.locator('gbif-occurrence-table [role=alert]', { hasText: 'predicate is not valid' }).waitFor(T);
+      await page.locator('gbif-occurrence-gallery [role=alert]', { hasText: 'predicate is not valid' }).waitFor(T);
+      await page.locator('gbif-occurrence-filters [role=alert]', { hasText: 'predicate is not valid' }).waitFor(T);
+    }
+    await sleep(300);
+    assert.equal(posts(page).length, 0, 'no predicate request at all');
+    assert.equal(searches(page).length, 0, 'and no plain search either, which would also be everything');
+    assert.deepEqual(page.everythingRequests ?? [], []);
+    const errors = (await page.events('gbif-error')).filter((e) => e.tag === 'gbif-occurrence-search');
+    assert.equal(errors.length, bad.length);
+    assert.ok(errors.every((e) => /predicate is not valid/.test(e.detail.message)));
+    assert.ok(page.warnings.some((w) => /predicate is not valid/.test(w)));
+  });
+
+  await test('predicate: fixing a bad predicate, or changing a good one, reloads the views', async (make) => {
+    const S = freshState();
+    const page = await make(S);
+    await page.mount(withPredicate('{"type":"banana"}'));
+    await page.locator('gbif-occurrence-table [role=alert]', { hasText: 'predicate is not valid' }).waitFor(T);
+    await page.evaluate((p) => document.querySelector('#s').setAttribute('predicate', JSON.stringify(p)), SUBSET);
+    await waitTotal(page, 30);
+    assert.deepEqual(await countryCells(page), ['Norway', 'Sweden']);
+    await page.evaluate(() => document.querySelector('#s').setAttribute('predicate', JSON.stringify({ type: 'equals', key: 'COUNTRY', value: 'CL' })));
+    await waitTotal(page, 15);
+    assert.deepEqual(await countryCells(page), ['Chile']);
+    await page.evaluate(() => document.querySelector('#s').setAttribute('predicate', '{oops'));
+    await page.locator('gbif-occurrence-table [role=alert]', { hasText: 'predicate is not valid' }).waitFor(T);
+    assert.equal(await page.locator('gbif-occurrence-table tbody tr').count(), 0, 'the old rows are not left behind');
+    assert.deepEqual(page.everythingRequests ?? [], []);
+  });
+
+  await test('predicate: it comes from the page, never from the address, and is never written to it', async (make) => {
+    const page = await make();
+    await page.goto(`${PAGE_URL}?gbif_predicate=%7B%22type%22%3A%22equals%22%2C%22key%22%3A%22COUNTRY%22%2C%22value%22%3A%22CL%22%7D&predicate=x&gbif_country=SE`);
+    await page.waitForFunction(() => customElements.get('gbif-taxon-card'));
+    await page.mount(withPredicate({ type: 'in', key: 'COUNTRY', values: ['NO', 'SE', 'CL'] }, 'sync-url'));
+    await waitTotal(page, 15);
+    assert.deepEqual(await countryCells(page), ['Sweden'], 'the visitor\'s country from the address applies, the "predicate" in it does not');
+    await checkbox(page, 'Norway').check();
+    await page.waitForFunction(() => location.search.includes('gbif_country=NO'));
+    const params = new URL(page.url()).searchParams;
+    assert.deepEqual(params.getAll('gbif_country').sort(), ['NO', 'SE']);
+    assert.equal(params.get('predicate'), 'x', 'other parameters are left alone');
+    assert.ok(![...params.values()].some((v) => v.includes('in') && v.includes('COUNTRY') && v.includes('values')), 'the page\'s predicate is not written');
+  });
+
+  await test('predicate: a change costs a handful of requests, the same ones are never asked twice', async (make) => {
+    const page = await make();
+    await page.mount(withPredicate(SUBSET));
+    await page.locator('gbif-occurrence-table tbody tr').first().waitFor(T);
+    await checkbox(page, 'Norway').waitFor(T);
+    await page.locator('gbif-occurrence-gallery .gbif-occurrence-gallery__tile').first().waitFor(T);
+    // Nothing set: the table, the gallery, and the panel's one request (all its facets, with the total).
+    assert.equal(posts(page).length, 3);
+    await checkbox(page, 'Norway').check();
+    await waitTotal(page, 15);
+    await page.waitForFunction(() => /Sweden\s*15/.test(document.querySelector('gbif-occurrence-filters').shadowRoot.textContent), null, T);
+    await page.locator('gbif-occurrence-gallery', { hasText: '5 occurrences with images' }).waitFor(T);
+    // Then: the table, the gallery, the panel's request for the facets of unset filters, and one more for country on its own.
+    assert.equal(posts(page).length, 3 + 4);
+    const bodies = posts(page).map((b) => JSON.stringify(b));
+    assert.equal(new Set(bodies).size, bodies.length, 'no request twice');
+    // Going back to the first state asks nothing new: the answers are still remembered.
+    await checkbox(page, 'Norway').uncheck();
+    await waitTotal(page, 30);
+    assert.equal(posts(page).length, 3 + 4, 'answered from what was kept');
+  });
+
+  await test('predicate: a rate-limited request is tried again, with the same body', async (make) => {
+    const S = freshState();
+    let turnedAway = 0;
+    S.searchHook = async (q, body) => (body && !body.facets && body.limit > 0 && !JSON.stringify(body.predicate).includes('MEDIA_TYPE') && turnedAway++ === 0 ? { status: 429 } : undefined);
+    const page = await make(S);
+    await page.mount(withPredicate(SUBSET));
+    await page.locator('gbif-occurrence-table tbody tr').first().waitFor({ timeout: 15000 });
+    const tried = posts(page).filter((b) => b.limit > 0 && !JSON.stringify(b.predicate).includes('MEDIA_TYPE'));
+    assert.equal(tried.length, 2);
+    assert.deepEqual(tried[0], tried[1]);
+  });
+
+  await test('predicate: the search says what it asked, so a page can use the same subset elsewhere', async (make) => {
+    const page = await make();
+    await page.mount(withPredicate(SUBSET));
+    await page.locator('gbif-occurrence-table tbody tr').first().waitFor(T);
+    await page.evaluate(() => document.querySelector('#s').setFilters({ country: 'NO' }));
+    await waitTotal(page, 15);
+    const detail = (await page.events('gbif-query-change')).at(-1).detail;
+    assert.deepEqual(Object.keys(detail).sort(), ['params', 'predicate', 'query', 'source', 'userQuery']);
+    assert.deepEqual(detail.predicate.predicates.map((p) => p.key), ['COUNTRY', 'TAXON_KEY', 'COUNTRY'], 'the subset, the taxon, then the visitor\'s filter');
+    assert.deepEqual(detail.predicate.predicates[0], SUBSET, 'the subset, as given, comes first');
+    assert.ok(detail.predicate.predicates.some((p) => p.key === 'TAXON_KEY' && p.checklistKey), 'the checklist is inside the taxon predicate');
   });
 }
 

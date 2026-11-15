@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GBIF Community Components: searching occurrences</title>
+    <style>
+      body {
+        max-width: 64rem;
+        margin: 0 auto;
+        padding: 1.5rem 1rem 4rem;
+        font-family: system-ui, sans-serif;
+        line-height: 1.5;
+        color: #1f2933;
+      }
+      h1 { margin-bottom: 0.25rem; }
+      h2 { margin: 2.5rem 0 0.25rem; }
+      .lede { margin-top: 0; color: #667085; }
+      .search-layout { display: grid; gap: 1rem; grid-template-columns: 17rem 1fr; align-items: start; }
+      @media (max-width: 52rem) { .search-layout { grid-template-columns: 1fr; } }
+      code { background: #f2f4f7; padding: 0.05rem 0.3rem; border-radius: 3px; }
+    </style>
+    <script type="module" src="../src/index.js"></script>
+  </head>
+  <body>
+    <h1>Searching occurrences</h1>
+    <p class="lede">
+      Everything below talks to the live GBIF API. <a href="index.html">Back to the single-taxon components.</a>
+    </p>
+
+    <h2>1. One search, three views</h2>
+    <p class="lede">
+      <code>&lt;gbif-occurrence-search&gt;</code> holds the filters and draws nothing. The filter panel, table and
+      image gallery follow it and never talk to each other. Choose a country or a year range and all three change. With
+      <code>sync-url</code> the filters are kept in the address (<code>?gbif_country=…</code>), so a search can be
+      shared and the back button works.
+    </p>
+    <gbif-occurrence-search id="search" taxon-key="4QHKG" sync-url></gbif-occurrence-search>
+    <div class="search-layout">
+      <gbif-occurrence-filters search="#search"></gbif-occurrence-filters>
+      <div class="stack">
+        <gbif-occurrence-table search="#search" page-size="8"></gbif-occurrence-table>
+        <gbif-occurrence-gallery search="#search" page-size="8"></gbif-occurrence-gallery>
+      </div>
+    </div>
+
+    <h2>2. A subset given as a predicate</h2>
+    <p class="lede">
+      A page author's subset can be a GBIF <code>predicate</code>, which can say more than plain filters (<code>or</code>,
+      <code>not</code>, a geometry, a long list of datasets). Here: Puma in Argentina or Chile. The subset applies in full
+      to everything, the panel lists only what it leaves, and the visitor's filters narrow it further.
+    </p>
+    <gbif-occurrence-search
+      id="subset"
+      predicate='{"type":"and","predicates":[{"type":"equals","key":"TAXON_KEY","value":"4QHKG","checklistKey":"7ddf754f-d193-4cc9-b351-99906754a03b"},{"type":"in","key":"COUNTRY","values":["AR","CL"]}]}'
+    ></gbif-occurrence-search>
+    <div class="search-layout">
+      <gbif-occurrence-filters search="#subset" filters="country year basis-of-record q"></gbif-occurrence-filters>
+      <gbif-occurrence-table search="#subset" page-size="5"></gbif-occurrence-table>
+    </div>
+
+  </body>
+</html>

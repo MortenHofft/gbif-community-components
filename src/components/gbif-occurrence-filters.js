@@ -1,7 +1,7 @@
 import { html, css, nothing } from 'lit';
 import { GbifSearchConsumer } from '../shared/search-consumer.js';
 import { FILTERS, RECORD_LICENSES, countryName } from '../shared/filters.js';
-import { basisLabel, fetchFacets } from '../shared/occurrence.js';
+import { basisLabel } from '../shared/occurrence.js';
 import { clampInt } from '../shared/format.js';
 import { emit } from '../shared/events.js';
 
@@ -146,13 +146,16 @@ export class GbifOccurrenceFilters extends GbifSearchConsumer {
 
   async _load() {
     const run = ++this._run;
-    const facets = this._offered.map((name) => FILTERS[name].facet).filter(Boolean);
+    if (!this.searchEl.valid) {
+      // Nothing is asked: an invalid predicate must never turn into a request for everything.
+      this._facetStatus = 'idle';
+      this._total = null;
+      return;
+    }
     this._facetStatus = 'loading';
     try {
-      const { count, facets: byField } = await fetchFacets({
-        apiBase: this.config.apiBase,
-        params: this.searchEl.params,
-        facets,
+      const { count, facets: byField } = await this.searchEl.fetchFacets({
+        filters: this._offered.filter((name) => FILTERS[name].facet),
         facetLimit: clampInt(this.facetLimit, { min: 1, max: 100, fallback: 15 })
       });
       if (run !== this._run) return;
@@ -273,10 +276,8 @@ export class GbifOccurrenceFilters extends GbifSearchConsumer {
   }
 
   render() {
-    if (this._searchStatus === 'missing') {
-      return html`<p class="gbif-card__state" role="alert">No occurrence search was found for this component.</p>`;
-    }
-    if (this._searchStatus !== 'bound') return nothing;
+    const problem = this.renderSearchProblem();
+    if (problem) return problem;
 
     const active = Object.keys(this._query).length > 0;
     return html`

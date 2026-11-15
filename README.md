@@ -28,7 +28,7 @@ Please weigh these before adopting the components on a site.
 
 - **Not server-side rendered.** Content is fetched and drawn in the visitor's browser. Visitors without JavaScript see nothing, and search engines or other crawlers that do not run JavaScript will not index the content. The same goes for print previews of a page that has not finished loading and for CMS editors that do not run scripts. If search visibility of this content matters, fetch the data yourself and render it on your server, or treat these components as a complement to your own pages.
 - **Content appears after load.** There is a short delay while data is fetched. Components show loading states and, unless you add `reserve-space`, may shift the page layout when they fill in.
-- **Dependent on the GBIF API.** If the API is slow, unavailable or rate limiting, components show an error and fire a `gbif-error` event. A rate-limited or unavailable answer (429, 503) or a dropped connection is tried once more after a short pause; requests give up after 15 seconds. The occurrence search components make several requests for every change to the filters, so a busy site will meet the rate limit sooner. Sites with very high traffic should put a caching proxy in front of the API and point `api-base` at it. The image gallery uses an endpoint whose path contains `experimental`; it can change without notice.
+- **Dependent on the GBIF API.** If the API is slow, unavailable or rate limiting, components show an error and fire a `gbif-error` event. GBIF limits how many requests a client may send over time, and answers the excess with 429 (this project's own testing reached the limit). A page of many components sends many requests at once, so the client sends at most four at a time, and tries a rate-limited or unavailable answer (429, 503) or a dropped connection again, up to twice, with growing pauses. Requests give up after 15 seconds. The occurrence search components make several requests for every change to the filters, and a page with many of them can still be throttled: on a busy site put a caching proxy in front and point `api-base` at it. Sites with very high traffic should put a caching proxy in front of the API and point `api-base` at it. The image gallery uses an endpoint whose path contains `experimental`; it can change without notice.
 - **Visitors' browsers contact several servers directly** (see [Privacy and security policies](#privacy-and-security-policies)). That exposes visitors' IP addresses, and the page's address as referrer, to GBIF and to the hosts of the images shown. Mention this in your privacy notice where it applies.
 - **Content you do not control.** Data, names, classifications and images change as publishers update their datasets, and not every record has media. By default the taxonomy comes from the Catalogue of Life, whose content changes with every edition (see [Which taxon do I get?](#which-taxon-do-i-get)).
 - **Styling limits in the encapsulated build.** Theming is done through documented CSS custom properties and `::part()`. Anything beyond that needs the light-DOM build, which does not exist yet.
@@ -57,7 +57,7 @@ A taxon key only means something **inside a checklist**: the same key can be a d
 
 Components share one data layer instead of each doing its own thing.
 
-- **A shared API client** (`src/shared/api.js`) is the only code that talks to the GBIF APIs. Components never call `fetch` directly. It builds URLs (the API base may carry a path prefix or be relative to the page, for a same-origin proxy), shares identical in-flight requests, gives up on a request after 15 seconds, and never remembers a failure. Components also ignore a response that arrives after their taxon has changed.
+- **A shared API client** (`src/shared/api.js`) is the only code that talks to the GBIF APIs. Components never call `fetch` directly. It builds URLs (the API base may carry a path prefix or be relative to the page, for a same-origin proxy), shares identical in-flight requests, sends at most four at a time, gives up on a request after 15 seconds, tries a throttled one again (up to twice), and never remembers a failure. Components also ignore a response that arrives after their taxon has changed.
 - **Caching follows what the API says.** GBIF sends `Cache-Control` with `max-age` (10 minutes for occurrence searches, 20 minutes for map capabilities, about an hour for taxon data, 2 days for basemap tiles), but the API also sends `Pragma: no-cache` and `Expires: 0`, and browsers then fetch again on every page view, ignoring the max-age. So the client keeps successful responses in `sessionStorage` for the `max-age` the API gave (at most an hour), and in memory for the life of the page (up to 200 entries). The storage is per tab, holds only public API responses, is cleaned of everything it wrote when it fills up, and is optional: if storage is blocked, requests go to the network. A strict privacy policy may still want to list it.
 - **URL state is opt-in, and belongs to the search element.** Components do not touch the page's URL, except `<gbif-occurrence-search sync-url>`, which keeps the visitor's filters in namespaced query parameters (see [Searching occurrences](#searching-occurrences)).
 - **Components on the same page** coordinate in two ways. Components about one taxon use events (see [Events](#events)): the page listens and sets attributes. Components that show one *search* (filter panel, table, gallery) share a query through `<gbif-occurrence-search>` and never talk to each other. No state-management library is planned.
@@ -124,7 +124,7 @@ Occurrence search is not one component but a set that share one query, so that a
 
 | Element | Shows | Own attributes |
 | --- | --- | --- |
-| `gbif-occurrence-search` | Nothing. Holds the filters. | `taxon-key`, `dataset-key`, the author's filters below, `sync-url`, `url-prefix`, `url-history`; `checklist-key`, `api-base`, `site-base` |
+| `gbif-occurrence-search` | Nothing. Holds the filters. | `taxon-key`, `dataset-key`, `predicate`, the author's filters below, `sync-url`, `url-prefix`, `url-history`; `checklist-key`, `api-base`, `site-base` |
 | `gbif-occurrence-filters` | A panel: free text, country, basis of record, year range, the licence of the record, "only records with coordinates". Lists show how many occurrences each value gives. | `filters`, `facet-limit` (1–100, default 15) |
 | `gbif-occurrence-table` | The occurrences, a page at a time. A search with no results says so. | `columns`, `page-size` (1–100, default 20) |
 | `gbif-occurrence-gallery` | The occurrences that have a still image, as a grid, with each image's rights holder and licence. | `page-size` (1–100, default 24), `licenses`, `images` |
@@ -149,6 +149,32 @@ Every value is checked before it is sent or written to an address, and an invali
 **The page author's filters.** Set filters as attributes on the search element: `<gbif-occurrence-search taxon-key="4QHKG" country="NO" year="2000,*">`. Visitors cannot change or remove these, the filter panel does not offer them, and they are never written to the address. Filters a visitor chooses are separate, and `setFilters()` ignores an attempt to change a fixed one.
 
 **From script.** `search.setFilters({ country: ['NO'], year: '2000,*' })` changes the visitor's filters (`null`, `''` or `[]` removes one), `search.reset()` clears them, and `search.query`, `search.userQuery` and `search.params` read them. A change fires `gbif-query-change`.
+
+### A subset as a predicate
+
+A page author's subset can be a GBIF **predicate**, which says what the plain filters cannot: `or`, `not`, a geometry, a long list of datasets or taxa. The visitor still searches within it.
+
+```html
+<gbif-occurrence-search id="s" predicate='{
+  "type": "and",
+  "predicates": [
+    { "type": "equals", "key": "TAXON_KEY", "value": "4QHKG", "checklistKey": "7ddf754f-d193-4cc9-b351-99906754a03b" },
+    { "type": "in", "key": "COUNTRY", "values": ["AR", "CL"] },
+    { "type": "not", "predicate": { "type": "equals", "key": "BASIS_OF_RECORD", "value": "FOSSIL_SPECIMEN" } }
+  ]
+}'></gbif-occurrence-search>
+```
+
+The predicate types are `and`, `or`, `not`, `equals`, `in`, `like`, `range`, `greaterThan`, `greaterThanOrEquals`, `lessThan`, `lessThanOrEquals`, `isNull`, `isNotNull`, `within`, `geoDistance` and `fullTextSearch`, with GBIF's own keys (`COUNTRY`, `DATASET_KEY`, `YEAR`, …). See GBIF's [occurrence API documentation](https://techdocs.gbif.org/en/openapi/).
+
+- **The subset applies in full to everything.** The table, the gallery and the panel's counts all see it, so the panel lists only the countries (and so on) that the subset leaves. The visitor's filters narrow it further, and `taxon-key` and `dataset-key` are added to it.
+- **Multiselect still works.** On a predicate search a facet is narrowed by every filter, including its own, so choosing Argentina would hide Chile. The panel therefore asks for a filter's own counts in a request that leaves *that visitor's filter* out (and keeps the subset), so the other values stay listed.
+- **Free text** (`q`) is sent beside the predicate, as GBIF's API wants.
+- **An invalid predicate is never ignored.** Dropping it would search *everything* GBIF has: a predicate request without a predicate returns all 3.9 billion occurrences. So a predicate that is not valid JSON, has an unknown type or lacks a part it needs, makes the components that use the search show an error, fires `gbif-error`, and sends no request until it is fixed. An empty `predicate` attribute is the same as none.
+- **The predicate comes from the page, never from the address.** The address only holds the visitor's own filters, and the predicate is never written to it.
+- **`checklistKey` goes inside a `TAXON_KEY` part** (as above). At the top of the request GBIF ignores it and reads the key as a backbone key, which finds nothing for a Catalogue of Life key. Components do this for `taxon-key` themselves.
+- **What it costs.** A predicate search is a POST. Browsers cache no POST, and each one is preceded by a CORS preflight request (the API accepts only `application/json`, so it cannot be avoided). The client keeps each answer for as long as the API says, under the body of the request, as it does for other requests, and never asks the same thing twice. A change to the filters sends the table's request, the gallery's, one for the panel's counts of filters that are not set, and one more for each of the panel's filters that is: three requests at first and about four more for each change that sets a country, against three for plain filters. Plain filters are used when there is no `predicate`, because a GET is cheaper and cacheable.
+- **Not a GBIF "download".** A predicate here is a search, with the same limits (at most 100,000 results can be paged through).
 
 ### The page address
 
@@ -238,8 +264,8 @@ Components tell the page what happened through DOM events. All of them bubble an
 | `gbif-occurrence-select` | A visitor clicked an image's "details" link, a type specimen, a name in the table, or a picture in the occurrence gallery (cancelable) | `occurrenceKey`, `source` (`media`, `type-specimens`, `table`, `gallery`) |
 | `gbif-occurrences-select` | A visitor clicked the occurrence count, or the gallery's "all" link (cancelable) | `taxonKey`, `checklistKey`, `url`, `source` |
 | `gbif-map-explore` | A visitor clicked "Explore on GBIF.org" (cancelable) | `bounds`, `geometry` (WKT), `url` |
-| `gbif-query-change` | An occurrence search's filters changed. Fired by `gbif-occurrence-search`. | `query` (all filters in force), `userQuery`, `params` (the API request parameters), `source` (`update`, `reset`, `url` for back and forward, `attributes`) |
-| `gbif-error` | A request failed or timed out, or an image or the map could not load | `component`, `url`, `status`, `message` |
+| `gbif-query-change` | An occurrence search's filters, or its own attributes (including `predicate`), changed. Fired by `gbif-occurrence-search`. | `query` (all filters in force), `userQuery`, `params` (the plain search's request parameters), `predicate` (everything that narrows the search as one predicate, `q` apart, or `null`), `source` (`update`, `reset`, `url` for back and forward, `attributes`) |
+| `gbif-error` | A request failed or timed out, an image or the map could not load, or a search's `predicate` is not valid | `component`, `url`, `status`, `message` |
 
 **Cancelable events are navigation intents.** Links in the components point at GBIF.org, but a plain click first fires the event. If the page calls `preventDefault()`, nothing is opened and the page decides what to do, for example show the taxon on its own pages. Clicks with a modifier key (open in a new tab) are left to the browser. The licence link, the link to the checklist and the basemap's attribution links are not intents: they are credit.
 
@@ -266,6 +292,7 @@ Add `follow-selection` to the card to let it load a taxon clicked in the classif
 | Checklist title and version (source notes) | `v2/taxon/checklist/{checklistKey}` |
 | Occurrence count, type specimens | `v1/occurrence/search` |
 | Filter panel, table, gallery | `v1/occurrence/search`, with `facet` (counts for the panel), and `mediaType=StillImage` (gallery) |
+| The same, for a search with a `predicate` | `POST v1/occurrence/search/predicate` |
 | Small versions of images | `v1/image/cache/fit-in/400x/occurrence/{occurrenceKey}/media/{md5 of the image URL}` |
 | Images | `v1/occurrence/experimental/multimedia/species/{checklistKey}/{taxonKey}` |
 | Map | `v2/map/occurrence/density/…` |
@@ -299,7 +326,7 @@ npm run test:all                  # unit tests and the stubbed browser tests
 
 The two browser tests need [Playwright](https://playwright.dev) to be resolvable and a Chromium browser installed.
 
-The build writes `dist/gbif-components.js` (Lit and all nine components, about 28 KB gzipped) and, in `dist/chunks/`, Leaflet (about 54 KB gzipped, only downloaded when a map is drawn). **Serve the whole `dist/` directory**, not just the one file: the entry loads its chunks by relative path. The chunk names are fixed, so a directory can be copied to a CDN under a versioned path. There is no classic-script build, so load the bundle with `<script type="module">`. Content Management Systems that rewrite or concatenate scripts may need that to be turned off for this one. Nothing is published to npm or a CDN yet.
+The build writes `dist/gbif-components.js` (Lit and all nine components, about 30 KB gzipped) and, in `dist/chunks/`, Leaflet (about 54 KB gzipped, only downloaded when a map is drawn). **Serve the whole `dist/` directory**, not just the one file: the entry loads its chunks by relative path. The chunk names are fixed, so a directory can be copied to a CDN under a versioned path. There is no classic-script build, so load the bundle with `<script type="module">`. Content Management Systems that rewrite or concatenate scripts may need that to be turned off for this one. Nothing is published to npm or a CDN yet.
 
 If another script has already defined one of the tags, the bundle leaves it alone and warns in the console.
 
@@ -358,6 +385,7 @@ gbif-community-components/
 │       ├── taxon-element.js # base class for one taxon: shared inputs, resolving, events
 │       ├── search-consumer.js # base class for the parts of an occurrence search
 │       ├── filters.js       # the occurrence filters: validation, URLs
+│       ├── predicate.js     # a page author's predicate: validation; the filters as a predicate
 │       ├── occurrence.js    # occurrence search and facets, table columns, images and thumbnails
 │       ├── md5.js           # names images for GBIF's image cache
 │       ├── events.js        # emit() and cancelable "navigation intent" clicks

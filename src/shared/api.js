@@ -1,3 +1,5 @@
+import { md5 } from './md5.js';
+
 /**
  * The one place that talks to the GBIF API.
  *
@@ -14,10 +16,12 @@
  * - Failures are never remembered.
  * - Requests time out, so a hung connection ends in an error, not an endless
  *   "Loading".
- * - A "too many requests" (429) or "unavailable" (503) answer, or a request that got
- *   no readable answer at all, is tried once more after a short pause. (The API does
- *   not let browsers read `Retry-After`, so the pause is a guess.) Anything else, a
- *   timeout, and a second failure are errors.
+ * - At most MAX_CONCURRENT requests are in flight at once, the rest wait their turn. A browser
+ *   will send dozens at once over HTTP/2, and a page of many components does, which the API
+ *   answers with 429s ("too many requests").
+ * - A 429 or 503 answer, or a request that got no readable answer at all, is tried again after
+ *   a pause that doubles (up to MAX_RETRIES times). The API does not let browsers read
+ *   `Retry-After`, so the pause is a guess. Anything else, and a timeout, is an error.
  */
 
 const MAX_ENTRIES = 200;
@@ -29,6 +33,26 @@ const cache = new Map();
 let requestTimeoutMs = 15000;
 let retryDelayMs = 1200;
 const RETRY_STATUSES = [429, 503];
+const MAX_RETRIES = 2;
+const MAX_CONCURRENT = 4;
+
+let running = 0;
+const waiting = [];
+
+/** Wait for a turn; resolves to the function that gives it back. */
+function takeTurn() {
+  return new Promise((resolve) => {
+    const start = () => {
+      running += 1;
+      resolve(() => {
+        running -= 1;
+        waiting.shift()?.();
+      });
+    };
+    if (running < MAX_CONCURRENT) start();
+    else waiting.push(start);
+  });
+}
 
 /**
  * Worth one more try: the API is busy or unavailable, or the request never got an answer
@@ -115,14 +139,21 @@ function writeStored(url, data, seconds) {
   }
 }
 
-async function attempt(url) {
+/**
+ * One request: `call.url`, a `call.init` for fetch (method, body), and `call.storageKey`
+ * under which the answer is kept in session storage.
+ */
+async function attempt(call) {
+  const { url, init } = call;
+  const release = await takeTurn();
+  // The time limit starts when the request does, not while it waits its turn.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
   try {
-    const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal });
+    const res = await fetch(url, { ...init, headers: { Accept: 'application/json', ...init?.headers }, signal: controller.signal });
     if (!res.ok) throw new GbifApiError(`HTTP ${res.status}`, { url, status: res.status });
     const data = await res.json();
-    writeStored(url, data, freshSeconds(res.headers?.get?.('cache-control')));
+    writeStored(call.storageKey, data, freshSeconds(res.headers?.get?.('cache-control')));
     return data;
   } catch (err) {
     if (err instanceof GbifApiError) throw err;
@@ -130,37 +161,60 @@ async function attempt(url) {
     throw new GbifApiError(err.message || 'Network error', { url });
   } finally {
     clearTimeout(timer);
+    release();
   }
 }
 
-async function request(url) {
-  const stored = readStored(url);
+async function request(call) {
+  const stored = readStored(call.storageKey);
   if (stored !== undefined) return stored;
-  try {
-    return await attempt(url);
-  } catch (err) {
-    if (!shouldRetry(err)) throw err;
-    // A little randomness, so that several requests turned away together do not all come back together.
-    await new Promise((resolve) => setTimeout(resolve, retryDelayMs * (1 + Math.random() * 0.5)));
-    return attempt(url);
+  for (let tried = 0; ; tried += 1) {
+    try {
+      return await attempt(call);
+    } catch (err) {
+      if (tried >= MAX_RETRIES || !shouldRetry(err)) throw err;
+      // The pause grows each time, with a little randomness so that requests turned away together
+      // do not all come back together. It is spent waiting, not holding a turn.
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs * 2 ** tried * (1 + Math.random() * 0.5)));
+    }
   }
+}
+
+/** Share identical in-flight requests and remember successes, under `key`. */
+function remembered(key, call) {
+  const hit = cache.get(key);
+  if (hit) return hit;
+
+  const promise = request(call).catch((err) => {
+    // Only forget this request, not a newer one that replaced it for the same key.
+    if (cache.get(key) === promise) cache.delete(key);
+    throw err;
+  });
+
+  cache.set(key, promise);
+  // Maps keep insertion order, so the first key is the oldest entry.
+  if (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value);
+  return promise;
 }
 
 /** Fetch JSON, sharing identical in-flight requests and remembering successes. */
 export function getJson(url) {
-  const hit = cache.get(url);
-  if (hit) return hit;
+  return remembered(url, { url, storageKey: url });
+}
 
-  const promise = request(url).catch((err) => {
-    // Only forget this request, not a newer one that replaced it for the same URL.
-    if (cache.get(url) === promise) cache.delete(url);
-    throw err;
+/**
+ * POST a JSON body and read JSON back, with the same sharing, remembering and retrying as
+ * `getJson`. A browser caches no POST, and the API's own `max-age` is honoured here instead:
+ * the answer is remembered under the URL and the body (a hash of it, in session storage).
+ * The body must be built the same way each time for two requests to be recognised as one.
+ */
+export function postJson(url, body) {
+  const text = JSON.stringify(body);
+  return remembered(`POST ${url} ${text}`, {
+    url,
+    init: { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text },
+    storageKey: `${url}#${md5(text)}`
   });
-
-  cache.set(url, promise);
-  // Maps keep insertion order, so the first key is the oldest entry.
-  if (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value);
-  return promise;
 }
 
 /**
