@@ -12,6 +12,16 @@ The goal is to make it easy to show GBIF-mediated biodiversity data on custom si
 - **Standard browser APIs.** Custom elements, Shadow DOM and HTML templates are supported natively in all evergreen browsers. No build step is required to *use* a component.
 - **Encapsulated.** Styles and markup do not leak into the host page, and host page styles can be customised through documented CSS custom properties.
 
+## Technology choices
+
+- **[Lit](https://lit.dev)** (from Google) for building the components. Lit is a small layer over the standard web component APIs. It provides reactive properties, efficient rendering and a convenient way to write templates and styles, without the weight of a full framework.
+- **Plain, hand-written CSS** for styling. No utility-class framework such as Tailwind.
+- **BEM naming** for CSS class names, such as `gbif-taxon-card__title` and `gbif-taxon-card--compact`. This keeps class names predictable and avoids collisions, which matters most in the light-DOM build.
+- **CSS custom properties** as the theming interface, so site authors can restyle components from their own stylesheets. Each component reads them with a fallback, so it looks right without any configuration.
+- **Two build outputs:**
+  - **Encapsulated** (Shadow DOM): the default and the starting point. Styles are fully isolated from the host page.
+  - **Light DOM**: for authors who need detailed styling control. Planned as a second build over the same shared code, and not yet implemented.
+
 ## Example usage
 
 The exact element names and attributes are not final. The following illustrates the intended style:
@@ -65,7 +75,7 @@ These are starting points for discussion and may change as the project matures.
 - **Attributes:** use kebab-case HTML attributes (`taxon-key`, `country`, `page-size`). Use the GBIF identifiers and parameter names where practical so that people familiar with the API can guess them.
 - **Language:** a `language` attribute for localised labels, with English as the default. Translations should be contributed as data, not hard-coded.
 - **Events:** components emit `CustomEvent`s with a `gbif-` prefix for meaningful user actions (for example `gbif-taxon-select`) so host pages can react.
-- **Styling:** expose theming through CSS custom properties such as `--gbif-font-family` and `--gbif-accent-color`, plus `::part()` where useful.
+- **Styling:** write plain CSS with BEM class names. Expose theming through CSS custom properties such as `--gbif-font-family` and `--gbif-accent-color`, each with a sensible fallback, plus `::part()` where useful.
 - **No global side effects.** Components should not add global CSS or mutate `window` beyond registering their own custom element.
 
 ## Repository layout (proposed)
