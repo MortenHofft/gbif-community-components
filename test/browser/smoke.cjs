@@ -17,6 +17,7 @@ const { chromium } = require('playwright');
 const PORT = 5199;
 const URL = `http://127.0.0.1:${PORT}/examples/index.html`;
 const SEARCH_URL = `http://127.0.0.1:${PORT}/examples/search.html`;
+const DETAIL_URL = `http://127.0.0.1:${PORT}/examples/occurrence.html?key=5938145577`;
 const SHOTS = process.env.SCREENSHOT_DIR || os.tmpdir();
 
 async function startServer() {
@@ -143,7 +144,7 @@ const check = async (label, fn) => {
 
     // A check on this page that fails is tried again from a fresh load after a pause: when the API's limit has been
     // reached, components show an error until it recovers, which is the right behaviour but not a failure of the code.
-    const liveRetry = async (fn, tries = 3) => {
+    const liveRetry = async (fn, tries = 3, url = SEARCH_URL) => {
       for (let attempt = 1; ; attempt += 1) {
         try {
           return await fn();
@@ -151,7 +152,7 @@ const check = async (label, fn) => {
           if (attempt >= tries) throw error;
           console.log(`  (attempt ${attempt} failed: ${String(error.message).split('\n')[0]}; trying again from a fresh load)`);
           await sleep(Number(process.env.SMOKE_PAUSE_MS ?? 45000));
-          await page.goto(SEARCH_URL);
+          await page.goto(url);
         }
       }
     };
@@ -210,6 +211,38 @@ const check = async (label, fn) => {
         { timeout: 60000 }
       );
     }));
+
+    await check('an occurrence page shows the record in Darwin Core groups, with its image and a map, each term once', () =>
+      liveRetry(async () => {
+        await page.goto(DETAIL_URL);
+        await page.locator('gbif-occurrence-groups section').first().waitFor({ timeout: 60000 });
+        const titles = await page.locator('gbif-occurrence-groups [role=heading]').allInnerTexts();
+        const order = ['Record-level', 'Occurrence', 'Event', 'Location', 'Identification', 'Taxon', 'GBIF processing'];
+        assert.deepEqual(titles.filter((t) => order.includes(t)), order.filter((t) => titles.includes(t)), 'in the standard\'s order');
+        for (const wanted of ['Record-level', 'Event', 'Location', 'Taxon']) assert.ok(titles.includes(wanted), `${wanted} in ${titles}`);
+
+        // No term twice in a card: GBIF writes some terms twice (its own rewrite and the publisher's).
+        const duplicates = await page.evaluate(() =>
+          [...document.querySelector('gbif-occurrence-groups').shadowRoot.querySelectorAll('section')].flatMap((card) => {
+            const labels = [...card.querySelectorAll('.gbif-groups__term')].map((dt) => dt.textContent.trim());
+            return labels.filter((label, i) => labels.indexOf(label) !== i).map((label) => `${card.dataset.group}: ${label}`);
+          })
+        );
+        assert.deepEqual(duplicates, []);
+
+        // The picture comes from GBIF's image cache, and there is a map of the location.
+        await page.waitForFunction(
+          () => {
+            const imgs = [...document.querySelector('gbif-occurrence-images').shadowRoot.querySelectorAll('img')];
+            return imgs.length > 0 && imgs.every((img) => img.complete && img.naturalWidth > 0 && img.src.includes('/v1/image/cache/'));
+          },
+          null,
+          { timeout: 60000 }
+        );
+        await page.locator('gbif-occurrence-location .leaflet-container').waitFor({ timeout: 60000 });
+        assert.match(await page.locator('#title').innerText(), /Puma concolor/);
+      }, 3, DETAIL_URL)
+    );
 
     await check('details come from the Taxon API, never the deprecated Species API', async () => {
       assert.ok(gbifRequests.some((p) => p.startsWith('/v2/taxon/tree/')), 'classification from /v2/taxon/tree');

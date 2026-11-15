@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GBIF Community Components: occurrence search</title>
+    <style>
+      body {
+        max-width: 72rem;
+        margin: 0 auto;
+        padding: 1.5rem 1rem 4rem;
+        font-family: system-ui, sans-serif;
+        line-height: 1.5;
+        color: #1f2933;
+      }
+      h1 { margin-bottom: 0.25rem; }
+      .lede { margin-top: 0; color: #667085; }
+      .layout { display: grid; gap: 1rem; grid-template-columns: 17rem minmax(0, 1fr); align-items: start; margin-top: 1.5rem; }
+      .stack { display: grid; gap: 1rem; min-width: 0; }
+      @media (max-width: 52rem) { .layout { grid-template-columns: 1fr; } }
+      code { background: #f2f4f7; padding: 0.05rem 0.3rem; border-radius: 3px; }
+    </style>
+    <script type="module" src="../src/index.js"></script>
+  </head>
+  <body>
+    <h1>Occurrence search</h1>
+    <p class="lede">
+      Search the occurrences of <em>Puma concolor</em>, then open one. The filters are kept in the address, so the back
+      button from an occurrence returns to the same search. Clicking a result fires a cancelable
+      <code>gbif-occurrence-select</code> event; this page cancels it and opens
+      <a href="occurrence.html?key=5938145577">its own occurrence page</a> instead of GBIF.org.
+      <a href="index.html">All examples</a>
+    </p>
+
+    <gbif-occurrence-search id="s" taxon-key="4QHKG" sync-url></gbif-occurrence-search>
+    <div class="layout">
+      <gbif-occurrence-filters search="#s"></gbif-occurrence-filters>
+      <div class="stack">
+        <gbif-occurrence-table search="#s" page-size="10"></gbif-occurrence-table>
+        <gbif-occurrence-gallery search="#s" page-size="8"></gbif-occurrence-gallery>
+      </div>
+    </div>
+
+    <script type="module">
+      // Open the occurrence on this site, not on GBIF.org. Ctrl- and cmd-click are left to the browser.
+      document.addEventListener('gbif-occurrence-select', (event) => {
+        event.preventDefault();
+        location.href = `occurrence.html?key=${encodeURIComponent(event.detail.occurrenceKey)}`;
+      });
+    </script>
+  </body>
+</html>

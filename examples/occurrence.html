@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GBIF Community Components: occurrence</title>
+    <style>
+      body {
+        max-width: 80rem;
+        margin: 0 auto;
+        padding: 1.5rem 1rem 4rem;
+        font-family: system-ui, sans-serif;
+        line-height: 1.5;
+        color: #1f2933;
+      }
+      h1 { margin: 0.5rem 0 0.25rem; font-style: italic; }
+      .lede { margin-top: 0; color: #667085; }
+      .page { display: grid; gap: 1rem; grid-template-columns: minmax(0, 28rem) minmax(0, 1fr); align-items: start; margin-top: 1.5rem; }
+      .media { display: grid; gap: 1rem; min-width: 0; }
+      .more { display: grid; gap: 1rem; margin-top: 1rem; }
+      @media (max-width: 60rem) { .page { grid-template-columns: 1fr; } }
+      footer { margin-top: 2.5rem; padding-top: 0.75rem; border-top: 1px solid #d5dbe1; }
+      /* Cards are laid out by the page: the Darwin Core groups in two columns beside the media. */
+      gbif-occurrence-groups { --gbif-group-min-width: 20rem; }
+    </style>
+    <script type="module" src="../src/index.js"></script>
+  </head>
+  <body>
+    <a id="back" href="occurrences.html">← Back to the search</a>
+    <h1 id="title">Occurrence</h1>
+    <p class="lede" id="subtitle"></p>
+
+    <!-- Holds the record. Every card below points at it, and the record is fetched once. -->
+    <gbif-occurrence-record id="r"></gbif-occurrence-record>
+
+    <div class="page">
+      <div class="media">
+        <gbif-occurrence-images record="#r"></gbif-occurrence-images>
+        <gbif-occurrence-location record="#r"></gbif-occurrence-location>
+      </div>
+      <!-- One card for each Darwin Core group that has something in it. -->
+      <gbif-occurrence-groups record="#r"></gbif-occurrence-groups>
+    </div>
+
+    <!-- One card for each extension of the record. -->
+    <div class="more">
+      <gbif-occurrence-extensions record="#r"></gbif-occurrence-extensions>
+    </div>
+
+    <footer>
+      <gbif-attribution></gbif-attribution>
+    </footer>
+
+    <script type="module">
+      const record = document.querySelector('#r');
+      const key = new URLSearchParams(location.search).get('key');
+
+      if (key === null) {
+        document.querySelector('#title').textContent = 'No occurrence chosen';
+        document.querySelector('#subtitle').innerHTML = 'Choose one in <a href="occurrences.html">the search</a>.';
+      } else {
+        // The record element checks the key: it is digits only, or nothing is asked.
+        record.setAttribute('occurrence-key', key);
+      }
+
+      record.addEventListener('gbif-record-load', (event) => {
+        const { scientificName, basisOfRecord, datasetName, country, eventDate, occurrenceKey } = event.detail;
+        document.title = `${scientificName ?? 'Occurrence'} · GBIF Community Components`;
+        document.querySelector('#title').textContent = scientificName ?? 'Occurrence';
+        const subtitle = document.querySelector('#subtitle');
+        subtitle.textContent = [basisOfRecord?.toLowerCase().replace(/_/g, ' '), datasetName, country, eventDate].filter(Boolean).join(' · ');
+        const link = document.createElement('a');
+        link.href = `https://www.gbif.org/occurrence/${encodeURIComponent(occurrenceKey)}`;
+        link.textContent = 'View on GBIF.org';
+        link.target = '_blank';
+        link.rel = 'noopener';
+        subtitle.append(' · ', link);
+      });
+
+      // From the search, "back" goes back to the same search, because its filters are in the address.
+      document.querySelector('#back').addEventListener('click', (event) => {
+        if (history.length > 1 && document.referrer.includes('occurrences.html')) {
+          event.preventDefault();
+          history.back();
+        }
+      });
+    </script>
+  </body>
+</html>

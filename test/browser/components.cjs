@@ -149,9 +149,73 @@ function evalPredicate(p, r) {
 }
 const FACET_PICK = { COUNTRY: (r) => r.countryCode, BASIS_OF_RECORD: (r) => r.basisOfRecord, LICENSE: (r) => r._license };
 
+/* Occurrence records for the record page: a museum specimen with everything, and some awkward ones. */
+const DWC_NS = 'http://rs.tdwg.org/dwc/terms/';
+function makeOccurrences() {
+  const mof = (type, value, unit) => ({ [`${DWC_NS}measurementType`]: type, [`${DWC_NS}measurementValue`]: value, ...(unit ? { [`${DWC_NS}measurementUnit`]: unit } : {}) });
+  const rich = {
+    interpreted: {
+      key: 7001, gbifID: '7001', datasetKey: 'ds-1', publishingOrgKey: 'org-1', publishingCountry: 'GB', protocol: 'DWC_ARCHIVE', lastInterpreted: '2026-01-02T03:04:05.000+00:00', crawlId: 3,
+      basisOfRecord: 'PRESERVED_SPECIMEN', occurrenceStatus: 'PRESENT', institutionCode: 'NHMUK', collectionCode: 'BMNH', catalogNumber: 'BM 1940.1.3.1',
+      datasetName: 'Natural History Museum Collection', occurrenceID: 'https://example.org/specimen/1', recordedBy: 'J Delacour|W P. Lowe',
+      license: 'http://creativecommons.org/licenses/by/4.0/legalcode', references: 'https://example.org/specimen/1', rightsHolder: 'The Trustees',
+      eventDate: '1940-01-03', year: 1940, month: 1, day: 3, verbatimEventDate: '3 Jan 1940',
+      country: 'Chile', countryCode: 'CL', stateProvince: 'Magallanes', locality: 'Torres del Paine', decimalLatitude: -51.1, decimalLongitude: -72.9,
+      coordinateUncertaintyInMeters: 30, geodeticDatum: 'WGS84', minimumElevationInMeters: 120,
+      typeStatus: 'Holotype', identifiedBy: 'A. Expert', dateIdentified: '1941-02-02', preparations: 'skin',
+      scientificName: 'Puma concolor araucanus (Osgood, 1943)', kingdom: 'Animalia', family: 'Felidae', genus: 'Puma', species: 'Puma concolor', taxonRank: 'SUBSPECIES', taxonomicStatus: 'ACCEPTED',
+      taxonKey: 111, speciesKey: 222, issues: ['CONTINENT_DERIVED_FROM_COORDINATES'],
+      media: [
+        { type: 'StillImage', identifier: 'https://img.test/rich-1.png', creator: 'Ana Photographer', rightsHolder: 'Natural History Museum', publisher: 'NHM', license: `${CC}/by/4.0/`, references: 'https://example.org/media/1', created: '2020-05-06T00:00:00', title: 'Holotype skin' },
+        { type: 'StillImage', identifier: 'https://img.test/rich-2.png', description: 'Skull, lateral view', license: 'http://creativecommons.org/publicdomain/zero/1.0/' },
+        { type: 'Sound', identifier: 'https://media.test/call.mp3', title: 'Call', format: 'audio/mpeg', license: `${CC}/by-nc/4.0/` }
+      ],
+      extensions: {}, facts: [], relations: [], identifiers: []
+    },
+    verbatim: {
+      key: 7001, datasetKey: 'ds-1',
+      [`${DWC_NS}habitat`]: 'montane forest',
+      [`${DWC_NS}eventDate`]: '1940-01-03T00:00:00Z',
+      [`${DWC_NS}countryCode`]: 'CL',
+      [`${DWC_NS}locality`]: 'Torres del Paine',
+      [`${DWC_NS}decimalLatitude`]: '-51.100000',
+      'http://example.org/ns/localCode': 'X-1',
+      extensions: {
+        'http://rs.tdwg.org/dwc/terms/MeasurementOrFact': [mof('body mass', 45, 'kg'), mof('body length', '1.6', 'm'), mof('condition', 'good')],
+        'http://rs.tdwg.org/dwc/terms/ResourceRelationship': [{ [`${DWC_NS}resourceID`]: '7001', [`${DWC_NS}relatedResourceID`]: '7002', [`${DWC_NS}relationshipOfResource`]: 'same individual as', 'http://purl.org/dc/terms/references': 'https://example.org/rel/1' }],
+        'http://rs.gbif.org/terms/1.0/Multimedia': [{ 'http://purl.org/dc/terms/identifier': 'https://img.test/rich-1.png' }, { 'http://purl.org/dc/terms/identifier': 'https://img.test/rich-2.png' }],
+        'http://rs.gbif.org/terms/1.0/DNADerivedData': [{ [`${DWC_NS}marker`]: 'COI', [`${DWC_NS}sequence`]: 'ACGT' }]
+      }
+    }
+  };
+  const bare = { interpreted: { key: 7002, gbifID: '7002', scientificName: 'Plain thing', basisOfRecord: 'OBSERVATION', country: 'Norway', media: [], extensions: {} }, verbatim: { key: 7002 } };
+  const hostile = {
+    interpreted: {
+      key: 7003, gbifID: '7003', scientificName: '<img src=x onerror="window.__xss=1">', references: 'javascript:alert(1)', locality: '<script>window.__xss=2</script>', decimalLatitude: 10, decimalLongitude: 20, rightsHolder: { not: 'a string' },
+      media: [{ type: 'StillImage', identifier: 'javascript:alert(1)' }, null, 5, { type: 'StillImage', identifier: 'https://img.test/h.png', references: 'javascript:alert(2)', license: 'javascript:alert(3)', creator: '<b>x</b>' }]
+    },
+    verbatim: { key: 7003, extensions: { 'http://example.org/Evil': [{ 'http://example.org/a': '<img src=x onerror="window.__xss=3">', 'http://example.org/b': 'javascript:alert(4)', 'http://example.org/c': 'https://example.org/ok' }] } }
+  };
+  const manyRows = { interpreted: { key: 7006, gbifID: '7006', scientificName: 'Many rows', media: [], extensions: {} }, verbatim: { key: 7006, extensions: { 'http://rs.tdwg.org/dwc/terms/MeasurementOrFact': Array.from({ length: 130 }, (_, i) => mof(`m${i}`, i)) } } };
+  const verbatimFails = { interpreted: { ...bare.interpreted, key: 7005, gbifID: '7005', locality: 'Somewhere' }, verbatim: null, failVerbatim: true };
+  return { 7001: rich, 7002: bare, 7003: hostile, 7005: verbatimFails, 7006: manyRows, 7500: { fail: true } };
+}
+
+/** An occurrence from the search dataset, as a full record, so that a result can be opened. */
+function recordFromSearch(S, key) {
+  const r = S.records.find((x) => String(x.key) === String(key));
+  if (!r) return null;
+  return {
+    interpreted: { key: r.key, gbifID: String(r.key), scientificName: r.scientificName, country: r.country, countryCode: r.countryCode, eventDate: r.eventDate, year: r.year, basisOfRecord: r.basisOfRecord, datasetName: r.datasetName, institutionCode: r.institutionCode, catalogNumber: r.catalogNumber, recordedBy: r.recordedBy, license: r.license, decimalLatitude: 60 + (r.key % 10), decimalLongitude: 10, media: r.media.map((m) => ({ type: m.type, identifier: m.identifier, license: m.license, rightsHolder: m.rightsHolder })), extensions: {} },
+    verbatim: { key: r.key }
+  };
+}
+
 function freshState() {
   return {
     records: makeRecords(),
+    occurrences: makeOccurrences(),
+    recordHook: null, // async (key, verbatim) => ({ status, delay }) | undefined
     searchHook: null, // async (query) => ({ status, body, delay }) | undefined
     thumbnails: 'ok', // 'ok' | 'missing' (404) | 'broken' (404, and the original fails too)
     images: [image(1), image(2), image(3, `${CC}/by-nc/4.0/`), image(4, `${CC}/by-nc-nd/4.0/`), image(5, 'http://creativecommons.org/publicdomain/zero/1.0/')],
@@ -225,6 +289,18 @@ async function installStubs(page, S) {
     return route.fulfill({ status: 201, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ count: matching.length, results: matching.slice(offset, offset + limit).map(strip), facets }) });
   };
 
+  const occurrenceRecord = async (route, key, verbatim) => {
+    if (S.recordHook) {
+      const hooked = await S.recordHook(key, verbatim);
+      if (hooked?.delay) await sleep(hooked.delay);
+      if (hooked?.status) return route.fulfill({ headers: { 'access-control-allow-origin': '*' }, status: hooked.status, body: 'error' });
+    }
+    const rec = S.occurrences[key] ?? recordFromSearch(S, key);
+    if (!rec) return route.fulfill({ headers: { 'access-control-allow-origin': '*' }, status: 404, body: `Occurrence ${key} was not found` });
+    if (rec.fail || (verbatim && rec.failVerbatim)) return route.fulfill({ headers: { 'access-control-allow-origin': '*' }, status: 500, body: 'error' });
+    return json(route, verbatim ? rec.verbatim : rec.interpreted);
+  };
+
   const api = async (route) => {
     const url = new URL(route.request().url());
     const p = url.pathname.replace(/^\/gbif-proxy/, '');
@@ -238,18 +314,19 @@ async function installStubs(page, S) {
     try { body = route.request().postDataJSON(); } catch { body = undefined; }
     requests.push({ host: url.hostname, path: p, query: Object.fromEntries(q), full: url.href, method, body });
 
+    let m;
     if (p === '/v2/species/match') {
       const m = MATCHES[q.get('scientificName')];
       if (!m || (m.kingdom && m.kingdom !== q.get('kingdom'))) return json(route, { diagnostics: { matchType: 'NONE', note: 'Multiple equal matches' } });
       return json(route, { usage: { key: m.key }, diagnostics: { matchType: m.type, confidence: m.confidence } });
     }
-    let m;
     if ((m = /^\/v2\/taxon\/tree\/[^/]+\/(\w+)$/.exec(p))) return TREES[m[1]] ? json(route, TREES[m[1]]) : route.fulfill({ headers: { 'access-control-allow-origin': '*' }, status: 404, body: 'nope' });
     if ((m = /^\/v2\/taxon\/checklist\/[^/]+$/.exec(p))) return json(route, { title: 'Catalogue of Life', version: '2026-10-16 XR', url: 'https://www.checklistbank.org/dataset/1' });
     if ((m = /^\/v2\/taxon\/[^/]+\/(\w+)$/.exec(p))) {
       if (S.hangDetail) return; // never answers
       return TAXA[m[1]] ? json(route, TAXA[m[1]]) : route.fulfill({ headers: { 'access-control-allow-origin': '*' }, status: 404, body: 'Taxon does not exist' });
     }
+    if ((m = /^\/v1\/occurrence\/(\d+)(\/verbatim)?$/.exec(p))) return occurrenceRecord(route, m[1], !!m[2]);
     if (p === '/v1/occurrence/search/predicate' && method === 'POST') return predicateSearch(route, body);
     if (p === '/v1/occurrence/search') {
       if (q.has('typeStatus')) {
@@ -319,7 +396,7 @@ async function newPage(S = freshState(), { width = 900, height = 900, init } = {
   context.on('page', (p) => page.opened.push(p.url()));
   await page.addInitScript(() => {
     window.__events = [];
-    for (const name of ['gbif-error', 'gbif-query-change', 'gbif-taxon-resolved', 'gbif-taxon-notfound', 'gbif-taxon-select', 'gbif-occurrence-select', 'gbif-occurrences-select', 'gbif-map-explore']) {
+    for (const name of ['gbif-error', 'gbif-query-change', 'gbif-record-load', 'gbif-record-notfound', 'gbif-record-change', 'gbif-taxon-resolved', 'gbif-taxon-notfound', 'gbif-taxon-select', 'gbif-occurrence-select', 'gbif-occurrences-select', 'gbif-map-explore']) {
       document.addEventListener(name, (e) => window.__events.push({ name, detail: e.detail, tag: e.target.localName }));
     }
   });
@@ -1532,6 +1609,379 @@ async function run() {
     assert.deepEqual(detail.predicate.predicates.map((p) => p.key), ['COUNTRY', 'TAXON_KEY', 'COUNTRY'], 'the subset, the taxon, then the visitor\'s filter');
     assert.deepEqual(detail.predicate.predicates[0], SUBSET, 'the subset, as given, comes first');
     assert.ok(detail.predicate.predicates.some((p) => p.key === 'TAXON_KEY' && p.checklistKey), 'the checklist is inside the taxon predicate');
+  });
+
+  /* ---------- One occurrence record, one card for each part ---------- */
+
+  const ORIGIN = `http://127.0.0.1:${PORT}`;
+  const CARDS = `
+    <gbif-occurrence-images record="#r"></gbif-occurrence-images>
+    <gbif-occurrence-location record="#r"></gbif-occurrence-location>
+    <gbif-occurrence-groups record="#r"></gbif-occurrence-groups>
+    <gbif-occurrence-extensions record="#r"></gbif-occurrence-extensions>`;
+  const RECORD = (key, cards = CARDS, attrs = '') => `<gbif-occurrence-record id="r" occurrence-key="${key}" ${attrs}></gbif-occurrence-record>${cards}`;
+  const recordReqs = (page) => page.requests.filter((r) => /^\/v1\/occurrence\/\d+(\/verbatim)?$/.test(r.path));
+  const groupTitles = (page) => page.locator('gbif-occurrence-groups [role=heading]').allTextContents();
+  const groupCard = (page, key) => page.locator(`gbif-occurrence-groups section[data-group="${key}"]`);
+  const rowsOf = async (page, key) =>
+    (await groupCard(page, key).locator('.gbif-groups__row').evaluateAll((rows) => rows.map((r) => [r.querySelector('dt').textContent.trim(), r.querySelector('dd').textContent.replace(/\s+/g, ' ').trim()])));
+
+  await test('record: one card for each Darwin Core group, in the standard\'s order, with GBIF\'s own and the publisher\'s extras last', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7001));
+    await page.locator('gbif-occurrence-groups section').first().waitFor(T);
+    assert.deepEqual(await groupTitles(page), ['Record-level', 'Occurrence', 'Material entity', 'Event', 'Location', 'Identification', 'Taxon', 'GBIF processing', 'Other terms']);
+    // Within a card the rows follow the standard too, and show the interpreted values.
+    assert.deepEqual((await rowsOf(page, 'location')).map(([term]) => term), ['Country', 'Country code', 'State province', 'Locality', 'Minimum elevation in meters', 'Decimal latitude', 'Decimal longitude', 'Geodetic datum', 'Coordinate uncertainty in meters']);
+    const location = Object.fromEntries(await rowsOf(page, 'location'));
+    assert.equal(location['Coordinate uncertainty in meters'], '30 m');
+    assert.equal(location['Decimal latitude'], '-51.1');
+    assert.equal(location['Country'], 'Chile');
+    assert.equal((await rowsOf(page, 'gbif')).find(([t]) => t === 'Issues')[1], 'Continent derived from coordinates', 'GBIF\'s flags read as a sentence');
+    assert.equal(Object.fromEntries(await rowsOf(page, 'identification'))['Type status'], 'Holotype');
+    assert.equal(Object.fromEntries(await rowsOf(page, 'material-entity'))['Preparations'], 'skin');
+    // Several values are one to a line, not joined by the pipe the publisher used.
+    assert.deepEqual(await groupCard(page, 'occurrence').locator('.gbif-groups__row', { hasText: 'Recorded by' }).locator('.gbif-groups__part').allTextContents(), ['J Delacour', 'W P. Lowe']);
+    assert.equal(Object.fromEntries(await rowsOf(page, 'record-level'))['Basis of record'].split('As published')[0].trim(), 'Preserved specimen', 'GBIF\'s capitals are made readable');
+    assert.deepEqual(page.errors, []);
+  });
+
+  await test('record: the value as published is shown only when it differs, and publisher-only terms are kept', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7001));
+    await page.locator('gbif-occurrence-groups section').first().waitFor(T);
+    const event = Object.fromEntries(await rowsOf(page, 'event'));
+    assert.match(event['Event date'], /1940-01-03\s*As published: 1940-01-03T00:00:00Z/, 'the date differs');
+    assert.equal(event['Habitat'], 'montane forest', 'a term only the publisher gave is shown, as published');
+    const location = Object.fromEntries(await rowsOf(page, 'location'));
+    assert.doesNotMatch(location['Decimal latitude'], /As published/, '-51.1 and -51.100000 are the same number');
+    assert.doesNotMatch(location['Country code'], /As published/);
+    const other = await groupCard(page, 'other').locator('.gbif-groups__row').evaluateAll((rows) => rows.map((r) => [r.querySelector('dt').textContent.trim(), r.querySelector('dt').title, r.querySelector('dd').textContent.trim()]));
+    assert.deepEqual(other, [['Local code', 'http://example.org/ns/localCode', 'X-1']], 'a term that is not Darwin Core, with its address on hover');
+    const license = groupCard(page, 'record-level').locator('.gbif-groups__row', { hasText: 'License' }).locator('a');
+    assert.equal(await license.textContent(), 'CC BY 4.0');
+    assert.equal(await license.getAttribute('href'), 'http://creativecommons.org/licenses/by/4.0/legalcode');
+  });
+
+  await test('record: groups chooses which cards and in what order, so a page can put them where it likes', async (make) => {
+    const page = await make();
+    await page.mount(`<gbif-occurrence-record id="r" occurrence-key="7001"></gbif-occurrence-record>
+      <gbif-occurrence-groups id="a" record="#r" groups="location event"></gbif-occurrence-groups>
+      <gbif-occurrence-groups id="b" record="#r" groups="Geological context taxon nope"></gbif-occurrence-groups>
+      <gbif-occurrence-groups id="c" record="#r" groups="taxon" heading="The taxon" heading-level="3"></gbif-occurrence-groups>
+      <gbif-occurrence-groups id="d" record="#r" groups="taxon location" heading="Ignored with two groups"></gbif-occurrence-groups>`);
+    await page.locator('#a section').first().waitFor(T);
+    assert.deepEqual(await page.locator('#a [role=heading]').allTextContents(), ['Location', 'Event']);
+    assert.deepEqual(await page.locator('#b [role=heading]').allTextContents(), ['Taxon'], 'a group the record has nothing for, and an unknown name, are left out');
+    assert.deepEqual(await page.locator('#c [role=heading]').allTextContents(), ['The taxon'], 'a heading replaces the title when one group is shown');
+    assert.equal(await page.locator('#c [role=heading]').getAttribute('aria-level'), '3');
+    assert.deepEqual(await page.locator('#d [role=heading]').allTextContents(), ['Taxon', 'Location'], 'with two cards a heading would be ambiguous, so each keeps its own');
+  });
+
+  await test('record: the images come from GBIF\'s image cache with their credit, and other media are listed', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7001));
+    await page.locator('gbif-occurrence-images img').first().waitFor(T);
+    assert.equal(await page.locator('gbif-occurrence-images figure').count(), 2);
+    await sleep(300);
+    const hash = crypto.createHash('md5').update('https://img.test/rich-1.png').digest('hex');
+    assert.ok(page.requests.some((r) => r.path === `/v1/image/cache/fit-in/600x/occurrence/7001/media/${hash}`), 'named by a hash of the image URL');
+    assert.equal(page.requests.filter((r) => r.host === 'img.test').length, 0, 'the publisher\'s server is not contacted');
+    const first = page.locator('gbif-occurrence-images figure').first();
+    assert.match(await first.locator('figcaption').textContent(), /Holotype skin/);
+    assert.match(await first.locator('figcaption').textContent(), /By Ana Photographer · Rights holder: Natural History Museum · Published by NHM · CC BY 4\.0 · 2020-05-06/);
+    assert.equal(await first.locator('a').first().getAttribute('href'), 'https://example.org/media/1', 'a click goes to the publisher\'s page for the image');
+    const second = page.locator('gbif-occurrence-images figure').nth(1);
+    assert.equal(await second.locator('img').getAttribute('alt'), 'Skull, lateral view', 'the description is the alt text');
+    assert.equal(await second.locator('a').first().getAttribute('href'), 'https://img.test/rich-2.png', 'with no page for it, the image itself');
+    assert.match(await second.locator('figcaption').textContent(), /CC0/);
+    const other = page.locator('gbif-occurrence-images .gbif-images__other li');
+    assert.equal(await other.count(), 1);
+    assert.match(await other.textContent(), /Call \(audio\/mpeg\)/);
+    assert.equal(await other.locator('a').first().getAttribute('href'), 'https://media.test/call.mp3');
+  });
+
+  await test('record: images fall back to the publisher\'s file and then to a message, with the credit kept; "original" skips the cache', async (make) => {
+    const S = freshState();
+    S.thumbnails = 'missing';
+    const page = await make(S);
+    await page.mount(RECORD(7001));
+    await page.waitForFunction(() => document.querySelector('gbif-occurrence-images')?.shadowRoot.querySelector('img')?.src.startsWith('https://img.test/'), null, T);
+
+    const S2 = freshState();
+    S2.thumbnails = 'broken';
+    S2.occurrences[7001].interpreted.media[0].identifier = 'https://img.test/occ-gone.png';
+    const page2 = await make(S2);
+    await page2.mount(RECORD(7001));
+    await page2.locator('gbif-occurrence-images .gbif-images__broken').first().waitFor(T);
+    assert.ok((await page2.events('gbif-error')).some((e) => e.detail.message === 'Image failed to load'));
+    assert.match(await page2.locator('gbif-occurrence-images figcaption').first().textContent(), /Ana Photographer/, 'the credit stays');
+
+    const page3 = await make();
+    await page3.mount(`<gbif-occurrence-record id="r" occurrence-key="7001"></gbif-occurrence-record><gbif-occurrence-images record="#r" images="original"></gbif-occurrence-images>`);
+    await page3.locator('gbif-occurrence-images img').first().waitFor(T);
+    await sleep(300);
+    assert.equal(page3.requests.filter((r) => r.path.startsWith('/v1/image/cache/')).length, 0);
+    assert.ok(page3.requests.some((r) => r.host === 'img.test'));
+  });
+
+  await test('record: a map of the location, with the uncertainty drawn, GBIF\'s basemap, and the coordinates in words', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7001));
+    await mapReady(page, 'gbif-occurrence-location');
+    assert.match(await page.locator('gbif-occurrence-location .gbif-location__coordinates').textContent(), /51\.1° S, 72\.9° W · ± 30 m · WGS84/);
+    // The uncertainty circle and the point are drawn, and the view is fitted to the circle.
+    assert.equal(await page.locator('gbif-occurrence-location path.leaflet-interactive').count(), 2);
+    const zoom = await page.evaluate(() => document.querySelector('gbif-occurrence-location')._map.getZoom());
+    assert.ok(zoom >= 10 && zoom <= 14, `fitted to a 30 m circle, got zoom ${zoom}`);
+    const center = await page.evaluate(() => document.querySelector('gbif-occurrence-location')._map.getCenter());
+    assert.ok(Math.abs(center.lat + 51.1) < 0.01 && Math.abs(center.lng + 72.9) < 0.01);
+    await page.locator('gbif-occurrence-location img.leaflet-tile-loaded[src*="tile.gbif.org"]').first().waitFor({ state: 'attached', timeout: 10000 });
+    assert.ok(!page.requests.some((r) => /arcgisonline/.test(r.host)));
+    assert.match(await page.locator('gbif-occurrence-location .leaflet-control-attribution').textContent(), /OpenStreetMap/);
+  });
+
+  await test('record: no coordinates, no map; a bare record shows only the cards it has something for', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7002));
+    await page.locator('gbif-occurrence-groups section').first().waitFor(T);
+    await sleep(400);
+    assert.equal(await page.locator('gbif-occurrence-location .gbif-card').count(), 0, 'no map');
+    assert.equal(await page.locator('gbif-occurrence-images .gbif-card').count(), 0, 'no images');
+    assert.equal(await page.locator('gbif-occurrence-extensions .gbif-card').count(), 0, 'no extensions');
+    assert.deepEqual(await groupTitles(page), ['Record-level', 'Location', 'Taxon', 'GBIF processing'], 'only the groups the record has something for, in the standard\'s order');
+    assert.ok(!page.requests.some((r) => /leaflet/.test(r.path)), 'Leaflet is not even downloaded');
+  });
+
+  await test('record: one card for each extension, with the columns its records use; Multimedia is left to the images', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7001));
+    await page.locator('gbif-occurrence-extensions section').first().waitFor(T);
+    assert.deepEqual(await page.locator('gbif-occurrence-extensions [role=heading]').allTextContents(), ['Measurement or fact (3)', 'Resource relationship (1)', 'DNA derived data (1)']);
+    const mof = page.locator('gbif-occurrence-extensions section[data-extension="MeasurementOrFact"]');
+    assert.deepEqual(await mof.locator('th').allTextContents(), ['Measurement type', 'Measurement value', 'Measurement unit']);
+    assert.deepEqual(await mof.locator('tbody tr').first().locator('td').allTextContents(), ['body mass', '45', 'kg']);
+    assert.deepEqual(await mof.locator('tbody tr').nth(2).locator('td').allTextContents(), ['condition', 'good', ''], 'a record without a term leaves the cell empty');
+    const rel = page.locator('gbif-occurrence-extensions section[data-extension="ResourceRelationship"]');
+    assert.equal(await rel.locator('a').getAttribute('href'), 'https://example.org/rel/1');
+    assert.equal(await mof.locator('[role=region]').getAttribute('aria-label'), 'Measurement or fact');
+    assert.equal(await mof.locator('th[scope=col]').count(), 3);
+  });
+
+  await test('record: extensions can be chosen, excluded and left out by default', async (make) => {
+    const page = await make();
+    await page.mount(`<gbif-occurrence-record id="r" occurrence-key="7001"></gbif-occurrence-record>
+      <gbif-occurrence-extensions id="all" record="#r" exclude=""></gbif-occurrence-extensions>
+      <gbif-occurrence-extensions id="only" record="#r" only="measurement or fact, dnaderiveddata"></gbif-occurrence-extensions>
+      <gbif-occurrence-extensions id="except" record="#r" exclude="multimedia, measurementorfact"></gbif-occurrence-extensions>`);
+    await page.locator('#all section').first().waitFor(T);
+    assert.deepEqual(await page.locator('#all [role=heading]').allTextContents(), ['Measurement or fact (3)', 'Resource relationship (1)', 'Multimedia (2)', 'DNA derived data (1)']);
+    assert.deepEqual(await page.locator('#only [role=heading]').allTextContents(), ['Measurement or fact (3)', 'DNA derived data (1)']);
+    assert.deepEqual(await page.locator('#except [role=heading]').allTextContents(), ['Resource relationship (1)', 'DNA derived data (1)']);
+  });
+
+  await test('record: a long extension is cut, and says how much is left', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7006));
+    await page.locator('gbif-occurrence-extensions section').first().waitFor(T);
+    assert.equal(await page.locator('gbif-occurrence-extensions tbody tr').count(), 100);
+    assert.match(await page.locator('gbif-occurrence-extensions .gbif-extensions__omitted').textContent(), /30 more rows are not shown/);
+    assert.match(await page.locator('gbif-occurrence-extensions [role=heading]').textContent(), /\(130\)/);
+  });
+
+  await test('record: the record is asked for once, however many cards there are', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7001) + '<gbif-occurrence-groups record="#r" groups="taxon"></gbif-occurrence-groups><gbif-occurrence-groups record="#r" groups="event"></gbif-occurrence-groups>');
+    await page.locator('gbif-occurrence-groups section').first().waitFor(T);
+    await mapReady(page, 'gbif-occurrence-location');
+    assert.deepEqual(recordReqs(page).map((r) => r.path).sort(), ['/v1/occurrence/7001', '/v1/occurrence/7001/verbatim']);
+  });
+
+  await test('record: not found, a key that is not a key, and a failure are each said once by the record, not by every card', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7404));
+    await page.locator('gbif-occurrence-record [role=alert]', { hasText: 'was not found' }).waitFor(T);
+    assert.equal(await page.locator('[role=alert]').count(), 1, 'one message for the whole record');
+    assert.equal(await page.locator('gbif-occurrence-groups .gbif-card, gbif-occurrence-images .gbif-card, gbif-occurrence-extensions .gbif-card, gbif-occurrence-location .gbif-card').count(), 0);
+    assert.equal((await page.events('gbif-record-notfound')).length, 1);
+
+    await page.mount(RECORD(7500));
+    await page.locator('gbif-occurrence-record [role=alert]', { hasText: 'Could not load this occurrence' }).waitFor(T);
+    assert.ok((await page.events('gbif-error')).some((e) => e.tag === 'gbif-occurrence-record' && e.detail.status === 500));
+
+    const before = recordReqs(page).length;
+    for (const bad of ['12abc', '../1', '1/2', '1?x=1', '-5', '1e3']) {
+      await page.mount(RECORD(bad));
+      await page.locator('gbif-occurrence-record [role=alert]', { hasText: 'is not an occurrence key' }).waitFor(T);
+    }
+    assert.equal(recordReqs(page).length, before, 'a key that is not digits is never put into an address');
+  });
+
+  await test('record: if the published record fails, the interpreted one is still shown, and the page is told', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7005));
+    await page.locator('gbif-occurrence-groups section').first().waitFor(T);
+    assert.equal(await page.locator('[role=alert]').count(), 0, 'not an error for the reader');
+    const errors = (await page.events('gbif-error')).filter((e) => /as published/.test(e.detail.message));
+    assert.equal(errors.length, 1);
+    assert.doesNotMatch(await page.locator('gbif-occurrence-groups').evaluate((e) => e.shadowRoot.textContent), /As published/);
+  });
+
+  await test('record: changing the key loads the new record and clears the old one', async (make) => {
+    const S = freshState();
+    S.recordHook = async (key) => (key === '7002' ? { delay: 600 } : undefined);
+    const page = await make(S);
+    await page.mount(RECORD(7001));
+    await page.locator('gbif-occurrence-groups section[data-group="location"]').waitFor(T);
+    await page.evaluate(() => (document.querySelector('#r').occurrenceKey = '7002'));
+    await sleep(150);
+    assert.equal(await page.locator('gbif-occurrence-groups section').count(), 0, 'nothing of the old record while the new one loads');
+    assert.equal(await page.locator('gbif-occurrence-images .gbif-card').count(), 0);
+    await page.locator('gbif-occurrence-groups section[data-group="taxon"]').waitFor(T);
+    assert.match(await page.locator('gbif-occurrence-groups').evaluate((e) => e.shadowRoot.textContent), /Plain thing/);
+    assert.equal(await page.locator('gbif-occurrence-location .gbif-card').count(), 0);
+    const loads = (await page.events('gbif-record-load')).map((e) => e.detail.occurrenceKey);
+    assert.deepEqual(loads, ['7001', '7002']);
+    const changes = (await page.events('gbif-record-change')).map((e) => e.detail.status);
+    assert.deepEqual(changes, ['loading', 'ready', 'loading', 'ready']);
+  });
+
+  await test('record: a slow answer for an old key never replaces a newer one', async (make) => {
+    const S = freshState();
+    S.recordHook = async (key) => (key === '7001' ? { delay: 1500 } : undefined);
+    const page = await make(S);
+    await page.mount(RECORD(7001));
+    await page.evaluate(() => (document.querySelector('#r').occurrenceKey = '7002'));
+    await page.locator('gbif-occurrence-groups section[data-group="taxon"]').waitFor(T);
+    await sleep(2200);
+    assert.match(await page.locator('gbif-occurrence-groups').evaluate((e) => e.shadowRoot.textContent), /Plain thing/);
+    assert.deepEqual((await page.events('gbif-record-load')).map((e) => e.detail.occurrenceKey), ['7002']);
+  });
+
+  await test('record: text from the record is only ever text, and only web addresses are links', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7003));
+    await page.locator('gbif-occurrence-groups section').first().waitFor(T);
+    await page.locator('gbif-occurrence-extensions section').first().waitFor(T);
+    await page.locator('gbif-occurrence-images img').first().waitFor(T);
+    await sleep(300);
+    assert.equal(await page.evaluate(() => window.__xss), undefined);
+    for (const card of ['gbif-occurrence-groups', 'gbif-occurrence-extensions', 'gbif-occurrence-images']) {
+      assert.equal(await page.locator(`${card} .gbif-card img[src="x"], ${card} .gbif-card script`).count(), 0, card);
+    }
+    assert.match(await page.locator('gbif-occurrence-groups').evaluate((e) => e.shadowRoot.textContent), /<img src=x onerror/);
+    const hrefs = await page.locator('gbif-occurrence-groups a, gbif-occurrence-extensions a, gbif-occurrence-images a').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
+    assert.ok(hrefs.length >= 2 && hrefs.every((h) => /^https?:/.test(h)), `unsafe href in ${hrefs}`);
+    assert.equal(await page.locator('gbif-occurrence-images figure').count(), 1, 'the image with an unsafe address is dropped');
+    assert.match(await page.locator('gbif-occurrence-images figcaption').textContent(), /Licence not stated/);
+    assert.deepEqual(page.errors, []);
+  });
+
+  await test('record: cards are found by selector or by position, and say so when the record element is missing', async (make) => {
+    const page = await make();
+    await page.mount(`
+      <gbif-occurrence-record id="r" occurrence-key="7001">
+        <gbif-occurrence-groups id="inside" groups="taxon"></gbif-occurrence-groups>
+      </gbif-occurrence-record>
+      <gbif-occurrence-groups id="byId" record="#r" groups="event"></gbif-occurrence-groups>
+      <gbif-occurrence-groups id="missing" record="#nope"></gbif-occurrence-groups>
+      <div id="notarecord"></div>
+      <gbif-occurrence-groups id="wrong" record="#notarecord"></gbif-occurrence-groups>`);
+    await page.locator('#inside section').first().waitFor(T);
+    await page.locator('#byId section').first().waitFor(T);
+    assert.deepEqual(await page.locator('#inside [role=heading]').allTextContents(), ['Taxon']);
+    assert.equal(await page.locator('#missing .gbif-card').count(), 0, 'a card with no record draws nothing');
+    assert.ok(page.warnings.some((w) => /found no <gbif-occurrence-record> for "#nope"/.test(w)), page.warnings.join('|'));
+    assert.ok(page.warnings.some((w) => /matched <div>, which is not a <gbif-occurrence-record>/.test(w)));
+  });
+
+  await test('record: the cards come before their record in the page, and a looked-for record is not asked for twice', async (make) => {
+    const page = await make();
+    await page.mount(`<gbif-occurrence-groups id="g" record="#r" groups="taxon"></gbif-occurrence-groups><gbif-occurrence-record id="r" occurrence-key="7002"></gbif-occurrence-record>`);
+    await page.locator('#g section').first().waitFor(T);
+    assert.deepEqual(recordReqs(page).map((r) => r.path).sort(), ['/v1/occurrence/7002', '/v1/occurrence/7002/verbatim']);
+  });
+
+  await test('record: a dark host page cannot make the cards unreadable, and the theme variables reach them', async (make) => {
+    const page = await make();
+    await page.addStyleTag({ content: 'body { background: #141414 } body * { color: #e8e8e8 }' });
+    await page.mount(`<div style="--gbif-color-accent:#8a4b08">${RECORD(7001)}</div>`);
+    await page.locator('gbif-occurrence-groups section').first().waitFor(T);
+    await page.locator('gbif-occurrence-extensions section').first().waitFor(T);
+    const colour = (sel) => page.locator(sel).first().evaluate((e) => getComputedStyle(e).color);
+    assert.equal(await colour('gbif-occurrence-groups .gbif-groups__value'), 'rgb(31, 41, 51)');
+    assert.equal(await colour('gbif-occurrence-extensions tbody td'), 'rgb(31, 41, 51)');
+    assert.equal(await page.locator('gbif-occurrence-groups .gbif-card__badge').first().evaluate((e) => getComputedStyle(e).backgroundColor), 'rgb(138, 75, 8)');
+  });
+
+  await test('record: structure for assistive technology: terms and values, figures with captions, labelled tables, headings', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7001, CARDS.replace('<gbif-occurrence-groups record="#r">', '<gbif-occurrence-groups record="#r" heading-level="3">')));
+    await page.locator('gbif-occurrence-groups section').first().waitFor(T);
+    await page.locator('gbif-occurrence-images figure').first().waitFor(T);
+    assert.ok((await page.locator('gbif-occurrence-groups dl > .gbif-groups__row > dt').count()) > 20);
+    assert.equal(await page.locator('gbif-occurrence-groups [role=heading]').first().getAttribute('aria-level'), '3');
+    assert.equal(await page.locator('gbif-occurrence-images figure figcaption').count(), 2);
+    assert.ok(await page.locator('gbif-occurrence-images img').evaluateAll((imgs) => imgs.every((i) => i.alt && i.alt.length > 3)), 'every image has alt text');
+    assert.equal(await page.locator('gbif-occurrence-extensions caption').count(), 3);
+    assert.equal(await page.locator('gbif-occurrence-location [role=region]').getAttribute('aria-label'), 'Map of where Puma concolor araucanus (Osgood, 1943) was recorded');
+  });
+
+  await test('record: the record announces itself to the page, with what a heading needs', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7001, ''));
+    await page.waitForFunction(() => window.__events.some((e) => e.name === 'gbif-record-load'), null, T);
+    const [load] = await page.events('gbif-record-load');
+    assert.deepEqual(load.detail, { occurrenceKey: '7001', scientificName: 'Puma concolor araucanus (Osgood, 1943)', basisOfRecord: 'PRESERVED_SPECIMEN', datasetName: 'Natural History Museum Collection', country: 'Chile', eventDate: '1940-01-03' });
+  });
+
+  /* ---------- the demo pages ---------- */
+
+  await test('demo: a search result opens its occurrence page, and back returns to the same search', async (make) => {
+    const page = await make();
+    await page.goto(`${ORIGIN}/examples/occurrences.html?gbif_country=SE`);
+    await page.locator('gbif-occurrence-table tbody tr').first().waitFor(T);
+    assert.deepEqual([...new Set(await page.locator('gbif-occurrence-table tbody tr td:nth-child(2)').allTextContents())], ['Sweden']);
+    const name = (await page.locator('gbif-occurrence-table tbody tr a').first().textContent()).trim();
+    await page.locator('gbif-occurrence-table tbody tr a').first().click();
+    await page.waitForURL(/\/examples\/occurrence\.html\?key=\d+/);
+    assert.deepEqual(page.opened, [], 'it opened here, not on GBIF.org');
+    await page.locator('gbif-occurrence-groups section').first().waitFor(T);
+    assert.equal(await page.locator('#title').textContent(), name);
+    assert.match(await page.locator('#subtitle').textContent(), /Sweden/);
+    assert.equal(await page.locator('#subtitle a').getAttribute('href'), `https://www.gbif.org/occurrence/${new URL(page.url()).searchParams.get('key')}`);
+    assert.ok((await groupTitles(page)).includes('Location'));
+    await page.locator('gbif-occurrence-location .leaflet-container').waitFor(T);
+
+    await page.locator('#back').click();
+    await page.waitForURL(/occurrences\.html/);
+    await page.locator('gbif-occurrence-table tbody tr').first().waitFor(T);
+    assert.deepEqual([...new Set(await page.locator('gbif-occurrence-table tbody tr td:nth-child(2)').allTextContents())], ['Sweden'], 'the filters were in the address, so the same search is back');
+    assert.deepEqual(page.errors, []);
+  });
+
+  await test('demo: the occurrence page shows everything for a rich record, and explains itself when there is nothing to show', async (make) => {
+    const page = await make();
+    await page.goto(`${ORIGIN}/examples/occurrence.html?key=7001`);
+    await page.locator('gbif-occurrence-groups section').first().waitFor(T);
+    await page.locator('gbif-occurrence-images figure').first().waitFor(T);
+    await page.locator('gbif-occurrence-extensions section').first().waitFor(T);
+    await page.locator('gbif-occurrence-location .leaflet-container').waitFor(T);
+    assert.equal(await page.locator('#title').textContent(), 'Puma concolor araucanus (Osgood, 1943)');
+    assert.equal(await page.title(), 'Puma concolor araucanus (Osgood, 1943) · GBIF Community Components');
+    assert.equal(await page.locator('gbif-occurrence-groups section').count(), 9);
+    assert.equal(await page.locator('gbif-occurrence-extensions section').count(), 3);
+    await page.locator('gbif-attribution', { hasText: 'Biodiversity data from' }).waitFor(T);
+
+    await page.goto(`${ORIGIN}/examples/occurrence.html`);
+    assert.equal(await page.locator('#title').textContent(), 'No occurrence chosen');
+    await page.goto(`${ORIGIN}/examples/occurrence.html?key=7404`);
+    await page.locator('gbif-occurrence-record [role=alert]', { hasText: 'was not found' }).waitFor(T);
+    assert.equal(await page.locator('#title').textContent(), 'Occurrence');
+    await page.goto(`${ORIGIN}/examples/occurrence.html?key=${encodeURIComponent('1"><img src=x onerror="window.__xss=9">')}`);
+    await page.locator('gbif-occurrence-record [role=alert]', { hasText: 'is not an occurrence key' }).waitFor(T);
+    assert.equal(await page.evaluate(() => window.__xss), undefined, 'a key in the address cannot inject markup');
+    assert.equal(await page.locator('gbif-occurrence-record img').count(), 0);
   });
 }
 

@@ -2,33 +2,9 @@ import { html, css, nothing } from 'lit';
 import { GbifTaxonElement } from '../shared/taxon-element.js';
 import { buildUrl, getJson } from '../shared/api.js';
 import { emit } from '../shared/events.js';
-import { safeHttpUrl } from '../shared/format.js';
+import { GBIF_BASEMAPS, adoptLeafletStyles, basemapSource, loadLeaflet } from '../shared/leaflet.js';
 import { exploreGeometry } from '../shared/geo.js';
 import { occurrenceSearchUrl } from '../shared/links.js';
-
-/** GBIF's own raster basemaps, so no third-party map host is involved by default. */
-const GBIF_BASEMAPS = {
-  light: { label: 'Light', style: 'gbif-light' },
-  classic: { label: 'Classic', style: 'gbif-classic' },
-  dark: { label: 'Dark', style: 'gbif-dark' },
-  geyser: { label: 'Geyser', style: 'gbif-geyser' },
-  tuatara: { label: 'Tuatara', style: 'gbif-tuatara' },
-  bright: { label: 'Bright', style: 'osm-bright' }
-};
-const BASEMAP_URL = 'https://tile.gbif.org/3857/omt/{z}/{x}/{y}@1x.png?style=';
-const BASEMAP_ATTRIBUTION =
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, ' +
-  '&copy; <a href="https://openmaptiles.org/">OpenMapTiles</a>';
-
-/** Leaflet and its stylesheet are only downloaded when a map is actually drawn. */
-let leafletPromise;
-function loadLeaflet() {
-  leafletPromise ??= Promise.all([import('leaflet'), import('leaflet/dist/leaflet.css?inline')]).catch((error) => {
-    leafletPromise = undefined; // allow a retry later
-    throw error;
-  });
-  return leafletPromise;
-}
 
 /**
  * <gbif-occurrence-map taxon-key="4QHKG"></gbif-occurrence-map>
@@ -104,7 +80,6 @@ export class GbifOccurrenceMap extends GbifTaxonElement {
     this._layerKey = null;
     this._resizeObserver = null;
     this._initializing = false;
-    this._stylesAdopted = false;
   }
 
   onTaxonReset() {
@@ -175,7 +150,7 @@ export class GbifOccurrenceMap extends GbifTaxonElement {
       const current = this.renderRoot.querySelector('.gbif-occurrence-map__canvas');
       if (run !== this._runId || !this.isConnected || !current || this._map) return;
 
-      this._adoptStyles(leafletCss);
+      adoptLeafletStyles(this.renderRoot, leafletCss);
       this._leaflet = L;
       const reduceMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
       this._map = L.map(current, {
@@ -202,25 +177,8 @@ export class GbifOccurrenceMap extends GbifTaxonElement {
     }
   }
 
-  /** Leaflet's stylesheet has to live inside the shadow root to reach the map. */
-  _adoptStyles(cssText) {
-    if (this._stylesAdopted) return;
-    this._stylesAdopted = true;
-    const sheet = new CSSStyleSheet();
-    sheet.replaceSync(cssText);
-    this.renderRoot.adoptedStyleSheets = [...this.renderRoot.adoptedStyleSheets, sheet];
-  }
-
-  /** The basemap tile URL and its attribution. */
-  _basemapSource() {
-    const custom = safeHttpUrl(this.basemapUrl?.replace(/\{[a-z]\}/gi, 'x'));
-    if (custom) return { url: this.basemapUrl, attribution: this.basemapAttribution || '', custom: true };
-    const style = (GBIF_BASEMAPS[this.basemap] || GBIF_BASEMAPS.light).style;
-    return { url: `${BASEMAP_URL}${style}`, attribution: BASEMAP_ATTRIBUTION, custom: false };
-  }
-
   _applyBasemap() {
-    const { url, attribution } = this._basemapSource();
+    const { url, attribution } = basemapSource(this);
     this._basemapLayer?.remove();
     this._basemapLayer = this._leaflet.tileLayer(url, { attribution, maxZoom: 18 }).addTo(this._map);
     this._occurrenceLayer?.bringToFront();
@@ -292,7 +250,7 @@ export class GbifOccurrenceMap extends GbifTaxonElement {
     }
 
     const name = this.displayName;
-    const customBasemap = this._basemapSource().custom;
+    const customBasemap = basemapSource(this).custom;
 
     return html`
       <section class="gbif-card" part="card">
