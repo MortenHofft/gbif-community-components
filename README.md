@@ -165,7 +165,7 @@ A page author's subset can be a GBIF **predicate**, which says what the plain fi
 }'></gbif-occurrence-search>
 ```
 
-The predicate types are `and`, `or`, `not`, `equals`, `in`, `like`, `range`, `greaterThan`, `greaterThanOrEquals`, `lessThan`, `lessThanOrEquals`, `isNull`, `isNotNull`, `within`, `geoDistance` and `fullTextSearch`, with GBIF's own keys (`COUNTRY`, `DATASET_KEY`, `YEAR`, …). See GBIF's [occurrence API documentation](https://techdocs.gbif.org/en/openapi/).
+The predicate types are `and`, `or`, `not`, `equals`, `in`, `like`, `range`, `greaterThan`, `greaterThanOrEquals`, `lessThan`, `lessThanOrEquals`, `isNull`, `isNotNull`, `within` and `geoDistance`, with GBIF's own keys (`COUNTRY`, `DATASET_KEY`, `YEAR`, …). See GBIF's [occurrence API documentation](https://techdocs.gbif.org/en/openapi/). (The API also lists a `fullTextSearch` type, but it refused every form tried here. Use the search's `q` filter for free text; it is sent beside the predicate.) Of these, `and`, `or`, `not`, `equals`, `in`, `like`, `within`, `isNotNull` and year comparisons were checked against the live API; the others are passed through for the API to judge.
 
 - **The subset applies in full to everything.** The table, the gallery and the panel's counts all see it, so the panel lists only the countries (and so on) that the subset leaves. The visitor's filters narrow it further, and `taxon-key` and `dataset-key` are added to it.
 - **Multiselect still works.** On a predicate search a facet is narrowed by every filter, including its own, so choosing Argentina would hide Chile. The panel therefore asks for a filter's own counts in a request that leaves *that visitor's filter* out (and keeps the subset), so the other values stay listed.
