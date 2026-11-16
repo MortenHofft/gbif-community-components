@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { DWC_GROUPS, humanize, sentenceCase, localName, groupOf, cleanOccurrenceKey, buildGroups, buildExtensions, buildMedia, buildPoint, buildLocationNotes } from '../../src/shared/dwc.js';
+import { pickDataset } from '../../src/components/gbif-occurrence-citation.js';
 
 const DWC = 'http://rs.tdwg.org/dwc/terms/';
 const DC = 'http://purl.org/dc/terms/';
@@ -413,4 +414,24 @@ test('media: the address to load is the checked one, the exact string is kept fo
   const { images } = buildMedia({ media: [{ type: 'StillImage', identifier: '  https://img.test/a b.png ' }] });
   assert.equal(images[0].identifier, '  https://img.test/a b.png ', 'exact, because GBIF names a cached image after a hash of it');
   assert.equal(images[0].url, 'https://img.test/a%20b.png', 'checked, trimmed and written out in full');
+});
+
+test('terms are placed in the class the standard puts them in', () => {
+  assert.equal(groupOf('materialSampleID'), 'material-entity');
+  assert.equal(groupOf('associatedSequences'), 'material-entity');
+  assert.equal(groupOf('georeferenceVerificationStatus'), 'location');
+  assert.equal(groupOf('recordedBy'), 'occurrence');
+  assert.equal(groupOf('elevation'), 'gbif');
+  assert.equal(groupOf('somethingTheyInvented'), 'other');
+});
+
+test('a dataset answer is cut down to four fields, and a DOI or address that is not one is dropped', () => {
+  const big = { title: ' A dataset ', doi: 'https://doi.org/10.15468/abc123', homepage: 'https://example.org/x', citation: { text: 'Cite me.' }, contacts: new Array(5000).fill({ x: 1 }) };
+  assert.deepEqual(pickDataset(big), { title: 'A dataset', doi: '10.15468/abc123', citation: 'Cite me.', homepage: 'https://example.org/x' });
+  assert.equal(pickDataset({ doi: 'javascript:alert(1)', homepage: 'javascript:alert(2)' }).doi, undefined);
+  assert.equal(pickDataset({ doi: 'javascript:alert(1)', homepage: 'javascript:alert(2)' }).homepage, undefined);
+  assert.equal(pickDataset({ doi: '10.1234/with space' }).doi, undefined, 'a DOI has no spaces');
+  assert.equal(pickDataset({ doi: '10.15468/abc123' }).doi, '10.15468/abc123');
+  assert.equal(pickDataset(null), null);
+  assert.equal(pickDataset([1]).title, undefined);
 });

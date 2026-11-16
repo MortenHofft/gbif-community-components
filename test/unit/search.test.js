@@ -318,3 +318,8 @@ test('writing the address leaves other parameters exactly as they were written',
   writeUrlQuery(two, {}, 'gbif_');
   assert.equal(two.search, '?b_country=SE');
 });
+
+test('when the address repeats a single-valued filter, the last value is the one used', () => {
+  assert.deepEqual(readUrlQuery(new URLSearchParams('gbif_year=1999&gbif_year=2005&gbif_q=a&gbif_q=b'), 'gbif_'), { year: '2005', q: 'b' });
+  assert.deepEqual(readUrlQuery(new URLSearchParams('gbif_country=NO&gbif_country=SE'), 'gbif_'), { country: ['NO', 'SE'] }, 'a list keeps all');
+});

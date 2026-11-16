@@ -114,17 +114,9 @@ test('buildPredicate: the page author\'s subset is always in, and "without" only
 
 /* ---------- postJson ---------- */
 
-class FakeStorage {
-  getItem(key) { return key in this ? this[key] : null; }
-  setItem(key, value) { this[key] = String(value); }
-  removeItem(key) { delete this[key]; }
-}
-
 async function withFetch(handler, run) {
   clearCache();
   const realFetch = globalThis.fetch;
-  const realStorage = globalThis.sessionStorage;
-  globalThis.sessionStorage = new FakeStorage();
   const calls = [];
   globalThis.fetch = async (url, init = {}) => {
     calls.push({ url, method: init.method ?? 'GET', headers: init.headers, body: init.body ? JSON.parse(init.body) : undefined });
@@ -135,7 +127,6 @@ async function withFetch(handler, run) {
     return await run(calls);
   } finally {
     globalThis.fetch = realFetch;
-    globalThis.sessionStorage = realStorage;
     clearCache();
   }
 }
@@ -156,19 +147,17 @@ test('postJson sends JSON, and identical requests share one call; a different bo
   });
 });
 
-test('postJson answers are kept for the API\'s max-age under a key made of the URL and the body', async () => {
-  await withFetch(() => ({ body: { count: 7 }, cacheControl: 'public, max-age=600' }), async (calls) => {
+test('postJson answers are remembered for the page, under the URL and the body', async () => {
+  await withFetch(() => ({ body: { count: 7 } }), async (calls) => {
     const body = { limit: 0, predicate: { type: 'equals', key: 'A', value: 'x' } };
     await postJson('https://api.test/p', body);
-    const keys = Object.keys(globalThis.sessionStorage);
-    assert.equal(keys.length, 1);
-    assert.match(keys[0], /^gbif-components:v1:https:\/\/api\.test\/p#[0-9a-f]{32}$/, 'a hash of the body, not the body');
-    clearMemoryCache(); // a new page view in the same tab
-    assert.deepEqual(await postJson('https://api.test/p', body), { count: 7 });
-    assert.equal(calls.length, 1, 'read from storage');
-    clearMemoryCache();
+    assert.deepEqual(await postJson('https://api.test/p', structuredClone(body)), { count: 7 });
+    assert.equal(calls.length, 1, 'the same body is not asked twice');
     await postJson('https://api.test/p', { ...body, limit: 1 });
-    assert.equal(calls.length, 2, 'a different body is not found there');
+    assert.equal(calls.length, 2, 'a different body is another request');
+    clearMemoryCache(); // a new page view
+    await postJson('https://api.test/p', body);
+    assert.equal(calls.length, 3, 'and a new page view asks again');
   });
 });
 

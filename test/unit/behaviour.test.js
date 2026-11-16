@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildUrl, getJson, clearCache, clearMemoryCache, freshSeconds, setRequestTimeout, setRetryDelay, GbifApiError } from '../../src/shared/api.js';
+import { buildUrl, getJson, postJson, clearCache, clearMemoryCache, setRequestTimeout, setRetryDelay, GbifApiError } from '../../src/shared/api.js';
 import { configure, resolveConfig, DEFAULTS } from '../../src/shared/config.js';
 import {
   safeHttpUrl,
@@ -268,120 +268,43 @@ test('getChecklistInfo returns title and version, and null on failure', async ()
 
 /* ---------- Caching and timeouts ---------- */
 
-test('freshSeconds follows Cache-Control, capped at an hour', () => {
-  assert.equal(freshSeconds('public, max-age=600'), 600);
-  assert.equal(freshSeconds('public, max-age=172800'), 3600);
-  assert.equal(freshSeconds('no-cache, no-store, must-revalidate'), 0);
-  assert.equal(freshSeconds('private, max-age=600'), 0);
-  assert.equal(freshSeconds('public'), 0);
-  assert.equal(freshSeconds(null), 0);
-});
-
-class FakeStorage {
-  getItem(key) { return key in this ? this[key] : null; }
-  setItem(key, value) { this[key] = String(value); }
-  removeItem(key) { delete this[key]; }
+class WatchedStorage {
+  constructor() { this.touched = []; }
+  getItem(key) { this.touched.push(['get', key]); return null; }
+  setItem(key) { this.touched.push(['set', key]); }
+  removeItem(key) { this.touched.push(['remove', key]); }
+  key() { this.touched.push(['key']); return null; }
+  get length() { this.touched.push(['length']); return 0; }
 }
 
-test('responses are kept in session storage for as long as the server says they are fresh', async () => {
+test('nothing is written to the host page\'s storage, whatever the API says about caching', async () => {
   clearCache();
   const realFetch = globalThis.fetch;
-  const realStorage = globalThis.sessionStorage;
-  const realNow = Date.now;
-  globalThis.sessionStorage = new FakeStorage();
-  let calls = 0;
-  globalThis.fetch = async () => ({
-    ok: true,
-    // The real API also sends Pragma: no-cache, which is why browsers refetch. Only max-age matters here.
-    headers: { get: (name) => (name === 'cache-control' ? 'public, max-age=600' : null) },
-    json: async () => ({ calls: ++calls })
-  });
+  const realSession = globalThis.sessionStorage;
+  const realLocal = globalThis.localStorage;
+  const session = new WatchedStorage();
+  const local = new WatchedStorage();
+  globalThis.sessionStorage = session;
+  globalThis.localStorage = local;
+  globalThis.fetch = async () => ({ ok: true, headers: { get: () => 'public, max-age=600' }, json: async () => ({ ok: 1 }) });
   try {
-    await getJson('https://x.test/stored');
+    await getJson('https://x.test/a');
+    await postJson('https://x.test/b', { limit: 1 });
+    assert.deepEqual(session.touched, []);
+    assert.deepEqual(local.touched, []);
+    // Within the page, the answer is remembered: the same request is not made again.
+    let calls = 0;
+    globalThis.fetch = async () => ({ ok: true, headers: { get: () => null }, json: async () => ({ calls: ++calls }) });
+    await getJson('https://x.test/c');
+    await getJson('https://x.test/c');
     assert.equal(calls, 1);
-
-    clearMemoryCache(); // a new page view in the same tab
-    assert.deepEqual(await getJson('https://x.test/stored'), { calls: 1 }, 'a new page view reuses the stored response');
-    assert.equal(calls, 1);
-
-    clearMemoryCache();
-    const start = realNow();
-    Date.now = () => start + 601 * 1000;
-    await getJson('https://x.test/stored');
-    assert.equal(calls, 2, 'after max-age it is fetched again');
-  } finally {
-    Date.now = realNow;
-    globalThis.fetch = realFetch;
-    globalThis.sessionStorage = realStorage;
-    clearCache();
-  }
-});
-
-test('what is kept in session storage stays within a budget, oldest first, and never touches the page\'s own entries', async () => {
-  clearCache();
-  const realFetch = globalThis.fetch;
-  const realStorage = globalThis.sessionStorage;
-  const realNow = Date.now;
-  const storage = new FakeStorage();
-  globalThis.sessionStorage = storage;
-  storage['host-form-draft'] = 'x'.repeat(300_000);
-  let n = 0;
-  globalThis.fetch = async () => ({
-    ok: true,
-    headers: { get: (name) => (name === 'cache-control' ? 'public, max-age=600' : null) },
-    json: async () => ({ n: ++n, filler: 'y'.repeat(30_000) })
-  });
-  const ours = () => Object.keys(storage).filter((k) => k.startsWith('gbif-components:'));
-  const size = () => ours().reduce((sum, k) => sum + k.length + storage[k].length, 0);
-  try {
-    let clock = realNow();
-    Date.now = () => (clock += 1000);
-    for (let i = 0; i < 80; i += 1) await getJson(`https://x.test/page/${i}`);
-    assert.ok(size() <= 1_000_000, `kept ${size()} characters`);
-    assert.ok(ours().length >= 20, 'it still keeps a useful number of entries');
-    assert.equal(storage['host-form-draft'].length, 300_000, 'the page\'s own data is untouched');
-    assert.ok(!ours().some((k) => k.endsWith('/page/0')), 'the oldest entry went first');
-    assert.ok(ours().some((k) => k.endsWith('/page/79')), 'the newest entry is kept');
-
-    // An answer too large to be worth keeping is not kept at all.
-    globalThis.fetch = async () => ({ ok: true, headers: { get: () => 'public, max-age=600' }, json: async () => ({ big: 'z'.repeat(150_000) }) });
-    await getJson('https://x.test/big');
-    assert.ok(!ours().some((k) => k.endsWith('/big')));
-
-    // If the page has filled the quota, ours is given back and the request still succeeds.
-    storage.setItem = () => { throw new DOMException('full', 'QuotaExceededError'); };
-    globalThis.fetch = async () => ({ ok: true, headers: { get: () => 'public, max-age=600' }, json: async () => ({ fine: 1 }) });
-    assert.deepEqual(await getJson('https://x.test/full'), { fine: 1 });
-    assert.deepEqual(ours(), [], 'all of ours was given back');
-    assert.equal(storage['host-form-draft'].length, 300_000);
-  } finally {
-    Date.now = realNow;
-    globalThis.fetch = realFetch;
-    globalThis.sessionStorage = realStorage;
-    clearCache();
-  }
-});
-
-test('nothing is stored for responses without a max-age, and storage failures are harmless', async () => {
-  clearCache();
-  const realFetch = globalThis.fetch;
-  const realStorage = globalThis.sessionStorage;
-  globalThis.sessionStorage = new FakeStorage();
-  globalThis.fetch = async () => ({ ok: true, headers: { get: () => 'no-cache' }, json: async () => ({}) });
-  try {
-    await getJson('https://x.test/nostore');
-    assert.deepEqual(Object.keys(globalThis.sessionStorage), []);
-
-    globalThis.sessionStorage = {
-      getItem() { throw new Error('blocked'); },
-      setItem() { throw new Error('blocked'); },
-      removeItem() { throw new Error('blocked'); }
-    };
-    globalThis.fetch = async () => ({ ok: true, headers: { get: () => 'public, max-age=600' }, json: async () => ({ ok: 1 }) });
-    assert.deepEqual(await getJson('https://x.test/blocked'), { ok: 1 });
+    clearMemoryCache(); // a new page view
+    await getJson('https://x.test/c');
+    assert.equal(calls, 2, 'a new page view asks again');
   } finally {
     globalThis.fetch = realFetch;
-    globalThis.sessionStorage = realStorage;
+    globalThis.sessionStorage = realSession;
+    globalThis.localStorage = realLocal;
     clearCache();
   }
 });
@@ -507,6 +430,47 @@ test('waiting for a turn does not count against a request\'s time limit', async 
     assert.equal(answers.length, 12);
   } finally {
     setRequestTimeout(15000);
+    globalThis.fetch = realFetch;
+    clearCache();
+  }
+});
+
+test('requests beyond the limit wait in the order they were asked, and a retry waits longer each time', async () => {
+  clearCache();
+  const realFetch = globalThis.fetch;
+  try {
+    const started = [];
+    const finish = [];
+    globalThis.fetch = (url) => new Promise((resolve) => {
+      started.push(url);
+      finish.push(() => resolve({ ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) }));
+    });
+    const urls = Array.from({ length: 8 }, (_, i) => `https://q.test/${i}`);
+    const all = urls.map((u) => getJson(u));
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(started, urls.slice(0, 4), 'four at a time');
+    finish.slice(0, 4).forEach((f) => f());
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(started.slice(4), urls.slice(4), 'the rest start first come, first served');
+    finish.slice(4).forEach((f) => f());
+    await Promise.all(all);
+
+    // The pause before each retry doubles.
+    clearCache();
+    setRetryDelay(40);
+    const times = [];
+    let headers;
+    globalThis.fetch = async (url, init) => {
+      times.push(Date.now());
+      headers = init.headers;
+      return { ok: false, status: 429, headers: { get: () => null }, json: async () => ({}) };
+    };
+    await assert.rejects(getJson('https://q.test/retry'), (e) => e.status === 429);
+    assert.equal(times.length, 3, 'tried again twice');
+    assert.ok(times[2] - times[1] > times[1] - times[0], `the second pause (${times[2] - times[1]} ms) is longer than the first (${times[1] - times[0]} ms)`);
+    assert.equal(headers.Accept, 'application/json');
+  } finally {
+    setRetryDelay(1200);
     globalThis.fetch = realFetch;
     clearCache();
   }

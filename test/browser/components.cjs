@@ -2567,6 +2567,7 @@ async function run() {
     await page.evaluate(() => document.querySelector('gbif-occurrence-filters').remove());
     await sleep(800);
     assert.deepEqual(await page.evaluate(() => document.querySelector('#s').userQuery), {});
+    assert.deepEqual(page.errors, [], 'the timer of a removed panel must not fire');
   });
 
   await test('record: a change of api-base asks the new address, and what is on screen is not the old record', async (make) => {
@@ -2616,6 +2617,35 @@ async function run() {
     });
     assert.equal(await page.evaluate(() => window.__loc._resizeObserver), null, 'the observer was released');
     assert.equal(await page.evaluate(() => window.__loc._map), null);
+  });
+
+  await test('location: a record that changes while Leaflet is still downloading is drawn for the new record, or not at all', async (make) => {
+    const page = await make();
+    await page.route(/\/leaflet[^/]*(\.js|\.css)?(\?|$)/, async (route) => {
+      await sleep(1200);
+      await route.continue();
+    });
+    await page.mount(RECORD(7001));
+    await page.locator('gbif-occurrence-location .gbif-location__canvas').waitFor(T);
+    await page.evaluate(() => (document.querySelector('#r').occurrenceKey = '7002')); // no coordinates
+    await page.locator('gbif-occurrence-location', { hasText: 'no usable coordinates' }).waitFor(T);
+    await sleep(1800);
+    assert.deepEqual(page.errors, [], 'the map did not try to draw a point that is not there');
+    assert.equal(await page.locator('gbif-occurrence-location .leaflet-container').count(), 0);
+    await page.evaluate(() => (document.querySelector('#r').occurrenceKey = '8002'));
+    await mapReady(page, 'gbif-occurrence-location');
+    assert.ok(Math.abs((await page.evaluate(() => document.querySelector('gbif-occurrence-location')._map.getCenter().lat)) - 89.95) < 5);
+  });
+
+  await test('badge: --gbif-badge-display hides the GBIF badge', async (make) => {
+    const page = await make();
+    await page.mount('<style>gbif-attribution, gbif-occurrence-table { --gbif-badge-display: none; }</style>' + ALL_VIEWS());
+    await waitTotal(page, 60);
+    assert.equal(await page.locator('gbif-occurrence-filters .gbif-card__badge').first().evaluate((e) => getComputedStyle(e).display !== 'none'), true, 'shown by default');
+    assert.equal(await page.locator('gbif-occurrence-table .gbif-card__badge').count() === 0 || await page.locator('gbif-occurrence-table .gbif-card__badge').first().evaluate((e) => getComputedStyle(e).display) === 'none', true);
+    await page.mount('<style>gbif-occurrence-filters { --gbif-badge-display: none; }</style>' + ALL_VIEWS());
+    await page.locator('gbif-occurrence-filters .gbif-card__badge').first().waitFor({ state: 'attached', timeout: 10000 });
+    assert.equal(await page.locator('gbif-occurrence-filters .gbif-card__badge').first().evaluate((e) => getComputedStyle(e).display), 'none');
   });
 
 }

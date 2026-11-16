@@ -210,7 +210,7 @@ function shown(name, value, interpreted = false) {
 function addressKey(href) {
   try {
     const url = new URL(href);
-    return `${url.host.toLowerCase()}${url.pathname.replace(/\/(legalcode|deed\.[a-z]+)$/i, '').replace(/\/$/, '')}${url.search}`;
+    return `${url.host.toLowerCase()}${url.pathname.replace(/\/$/, '')}${url.search}`;
   } catch {
     return href;
   }

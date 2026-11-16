@@ -1,20 +1,13 @@
-import { md5 } from './md5.js';
-
 /**
  * The one place that talks to the GBIF API.
  *
  * - Identical requests made at the same time share a single request.
  * - Successful responses are remembered for the life of the page (up to
  *   MAX_ENTRIES, oldest dropped first).
- * - They are also kept in `sessionStorage` for as long as the API's own
- *   `Cache-Control: max-age` says they are fresh. The API also sends
- *   `Pragma: no-cache` and `Expires: 0`, which makes browsers ignore the
- *   max-age and fetch again on every page view; this layer restores the
- *   freshness the API actually asks for. It is per tab, holds nothing
- *   personal, and every part of it is optional: if storage is unavailable or
- *   full, requests simply go to the network. It never uses more than
- *   MAX_STORED_TOTAL characters (the oldest entries go first), so it cannot
- *   crowd out what the host page keeps there.
+ * - Nothing is written to `sessionStorage` or any other storage that belongs to the host page. The browser's
+ *   own HTTP cache is left to do what it does. (GBIF sends `Pragma: no-cache` along with its `max-age`, so
+ *   browsers fetch again on a reload; a caching proxy in front of the API, set with `apiBase`, is the way to
+ *   keep that traffic off GBIF.)
  * - Failures are never remembered.
  * - Requests time out, so a hung connection ends in an error, not an endless
  *   "Loading".
@@ -27,12 +20,6 @@ import { md5 } from './md5.js';
  */
 
 const MAX_ENTRIES = 200;
-// session storage belongs to the host page's origin and is shared with the page's own code (its quota is
-// about 5 MB for everyone), so this layer keeps to a small budget of its own and drops its oldest entries first.
-const MAX_STORED_ENTRY = 100_000;
-const MAX_STORED_TOTAL = 1_000_000;
-const MAX_FRESH_SECONDS = 3600;
-const STORAGE_PREFIX = 'gbif-components:v1:';
 
 const cache = new Map();
 let requestTimeoutMs = 15000;
@@ -103,74 +90,8 @@ export function buildUrl(base, path, params = {}) {
   return url.toString();
 }
 
-/** Seconds a response may be reused, from its `Cache-Control` header (0 if none). */
-export function freshSeconds(cacheControl) {
-  if (!cacheControl || /no-store|private/i.test(cacheControl)) return 0;
-  const match = /max-age=(\d+)/i.exec(cacheControl);
-  return match ? Math.min(Number(match[1]), MAX_FRESH_SECONDS) : 0;
-}
-
-function readStored(url) {
-  try {
-    const raw = sessionStorage.getItem(STORAGE_PREFIX + url);
-    if (!raw) return undefined;
-    const { expires, data } = JSON.parse(raw);
-    if (Date.now() < expires) return data;
-    sessionStorage.removeItem(STORAGE_PREFIX + url);
-  } catch {
-    // Storage unavailable or entry unreadable: fall back to the network.
-  }
-  return undefined;
-}
-
-/** What this layer has stored: `{ key, size, at, expires }` for each entry, read cheaply from the front of each. */
-function storedEntries() {
-  const entries = [];
-  for (const key of Object.keys(sessionStorage)) {
-    if (!key.startsWith(STORAGE_PREFIX)) continue;
-    const raw = sessionStorage.getItem(key) ?? '';
-    const head = /^\{"at":(\d+),"expires":(\d+)/.exec(raw);
-    entries.push({ key, size: key.length + raw.length, at: head ? Number(head[1]) : 0, expires: head ? Number(head[2]) : 0 });
-  }
-  return entries;
-}
-
-function clearStored() {
-  try {
-    for (const key of Object.keys(sessionStorage)) {
-      if (key.startsWith(STORAGE_PREFIX)) sessionStorage.removeItem(key);
-    }
-  } catch {
-    // ignore
-  }
-}
-
-function writeStored(url, data, seconds) {
-  if (!(seconds > 0)) return;
-  try {
-    const now = Date.now();
-    const raw = JSON.stringify({ at: now, expires: now + seconds * 1000, data });
-    const key = STORAGE_PREFIX + url;
-    if (key.length + raw.length > MAX_STORED_ENTRY) return;
-
-    // Make room: expired entries first, then the oldest, until this one fits the budget.
-    const others = storedEntries().filter((entry) => entry.key !== key);
-    others.sort((a, b) => (a.expires < now ? -1 : 0) - (b.expires < now ? -1 : 0) || a.at - b.at);
-    let used = others.reduce((sum, entry) => sum + entry.size, 0);
-    while (others.length && used + key.length + raw.length > MAX_STORED_TOTAL) {
-      const oldest = others.shift();
-      sessionStorage.removeItem(oldest.key);
-      used -= oldest.size;
-    }
-    sessionStorage.setItem(key, raw);
-  } catch {
-    clearStored(); // most likely full (the host page's own data may fill it): give back all of ours
-  }
-}
-
 /**
- * One request: `call.url`, a `call.init` for fetch (method, body), and `call.storageKey`
- * under which the answer is kept in session storage.
+ * One request: `call.url` and a `call.init` for fetch (method, body).
  */
 async function attempt(call) {
   const { url, init } = call;
@@ -188,7 +109,6 @@ async function attempt(call) {
       // An answer that is not JSON will not be JSON next time either: not worth a retry (status is the answer's, not 0).
       throw new GbifApiError('The answer was not JSON', { url, status: res.status || 200 });
     }
-    writeStored(call.storageKey, data, freshSeconds(res.headers?.get?.('cache-control')));
     return data;
   } catch (err) {
     if (err instanceof GbifApiError) throw err;
@@ -201,8 +121,6 @@ async function attempt(call) {
 }
 
 async function request(call) {
-  const stored = readStored(call.storageKey);
-  if (stored !== undefined) return stored;
   for (let tried = 0; ; tried += 1) {
     try {
       return await attempt(call);
@@ -234,34 +152,26 @@ function remembered(key, call) {
 
 /** Fetch JSON, sharing identical in-flight requests and remembering successes. */
 export function getJson(url) {
-  return remembered(url, { url, storageKey: url });
+  return remembered(url, { url });
 }
 
 /**
  * POST a JSON body and read JSON back, with the same sharing, remembering and retrying as
- * `getJson`. A browser caches no POST, and the API's own `max-age` is honoured here instead:
- * the answer is remembered under the URL and the body (a hash of it, in session storage).
+ * `getJson`. The answer is remembered, for the life of the page, under the URL and the body.
  * The body must be built the same way each time for two requests to be recognised as one.
  */
 export function postJson(url, body) {
   const text = JSON.stringify(body);
   return remembered(`POST ${url} ${text}`, {
     url,
-    init: { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text },
-    storageKey: `${url}#${md5(text)}`
+    init: { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text }
   });
 }
 
-/**
- * Forget what is remembered in memory only, as a new page view would (mainly for tests).
- * Responses kept in session storage survive.
- */
-export function clearMemoryCache() {
+/** Forget everything remembered (mainly for tests). */
+export function clearCache() {
   cache.clear();
 }
 
-/** Forget everything remembered, in memory and in session storage (mainly for tests). */
-export function clearCache() {
-  cache.clear();
-  clearStored();
-}
+/** The same: there is nothing else to forget now (kept so that tests that name it still read well). */
+export const clearMemoryCache = clearCache;

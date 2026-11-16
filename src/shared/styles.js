@@ -67,6 +67,8 @@ export const cardStyles = css`
     border-bottom: 1px solid var(--gbif-color-border, #d5dbe1);
   }
   .gbif-card__badge {
+    /* --gbif-badge-display: none hides it, for a page that credits GBIF in its footer instead (see the README). */
+    display: var(--gbif-badge-display, inline-block);
     flex: none;
     padding: 0.1rem 0.4rem;
     border-radius: 4px;
