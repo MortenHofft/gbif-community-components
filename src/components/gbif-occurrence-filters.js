@@ -316,7 +316,7 @@ export class GbifOccurrenceFilters extends GbifSearchConsumer {
         </header>
         <div class="gbif-card__body" part="body">
           ${this._total !== null
-            ? html`<p class="gbif-occurrence-filters__total" role="status">
+            ? html`<p class="gbif-occurrence-filters__total">
                 ${this._total.toLocaleString()} occurrence${this._total === 1 ? '' : 's'}
               </p>`
             : nothing}

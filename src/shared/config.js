@@ -4,8 +4,11 @@ import { setRequestTimeout } from './api.js';
  * Defaults and configuration shared by all components.
  *
  * Every value can be set per element with an attribute (`api-base`,
- * `site-base`, `checklist-key`, `hide-source`) or once for the whole page with
- * `configure()`. Precedence: element attribute > configure() > built-in default.
+ * `site-base`, `checklist-key`, `hide-source`) or once for the whole page, either
+ * with an object `window.GbifComponentsConfig`, defined before the bundle loads (so
+ * that the first requests already use it), or with `configure()` afterwards (which
+ * makes components that have already asked ask again).
+ * Precedence: element attribute > page configuration > built-in default.
  */
 
 export const DEFAULTS = {
@@ -27,18 +30,34 @@ export const DEFAULTS = {
 };
 
 const overrides = {};
+const listeners = new Set();
+
+/** The parts of the configuration that change what a component asks for or shows. */
+const fingerprint = () => JSON.stringify(Object.keys(DEFAULTS).map((key) => overrides[key] ?? DEFAULTS[key]));
+
+/**
+ * Call `fn` when `configure()` changes something, so that components that have already asked can ask
+ * again. Returns the function that stops listening.
+ */
+export function onConfigChange(fn) {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
 
 /**
  * Set page-wide defaults, for example `configure({ siteBase: 'https://example.org' })`.
  * Passing `null` or `undefined` for a key removes its override.
  */
 export function configure(values = {}) {
+  const before = fingerprint();
   for (const key of Object.keys(DEFAULTS)) {
     if (!(key in values)) continue;
     if (values[key] === null || values[key] === undefined) delete overrides[key];
     else overrides[key] = values[key];
   }
   setRequestTimeout(overrides.timeoutMs ?? DEFAULTS.timeoutMs);
+  // Components that have already asked (with the old settings) ask again.
+  if (fingerprint() !== before) for (const fn of [...listeners]) fn();
 }
 
 const trimSlash = (url) => String(url).replace(/\/+$/, '');

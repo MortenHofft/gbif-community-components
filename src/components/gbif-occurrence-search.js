@@ -1,5 +1,5 @@
 import { LitElement, css, html } from 'lit';
-import { resolveConfig } from '../shared/config.js';
+import { onConfigChange, resolveConfig } from '../shared/config.js';
 import { emit } from '../shared/events.js';
 import { FILTERS, filterProblem, mergeQuery, normalizeQuery, readUrlQuery, sameQuery, toParams, writeUrlQuery } from '../shared/filters.js';
 import { buildPredicate, parsePredicate } from '../shared/predicate.js';
@@ -8,6 +8,9 @@ import { GbifApiError } from '../shared/api.js';
 
 const BASE_FILTER_PROPERTIES = ['country', 'year', 'basisOfRecord', 'license', 'hasCoordinate', 'q'];
 const SCOPE_PROPERTIES = ['taxonKey', 'datasetKey', 'checklistKey', 'apiBase', 'siteBase', 'predicate'];
+
+/** The searches that keep their filters in the address, so that two with one prefix can be noticed. */
+const syncing = new Set();
 
 /** A key from an attribute: a short plain string, or nothing. */
 const cleanKey = (value) => (typeof value === 'string' && /^[\w.-]{1,64}$/.test(value.trim()) ? value.trim() : undefined);
@@ -271,11 +274,14 @@ export class GbifOccurrenceSearch extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     if (this.syncUrl) this._startSync();
+    // A change of the page's settings (the API to ask, the checklist) is a change of query: ask again.
+    this._stopWatchingConfig = onConfigChange(() => this._ready && this._changed('attributes'));
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     this._stopSync();
+    this._stopWatchingConfig?.();
   }
 
   updated(changed) {
@@ -292,6 +298,11 @@ export class GbifOccurrenceSearch extends LitElement {
   _startSync() {
     if (this._syncing) return;
     this._syncing = true;
+    const prefix = this.urlPrefix ?? '';
+    if ([...syncing].some((other) => (other.urlPrefix ?? '') === prefix)) {
+      console.warn(`[gbif-components] Two <${this.localName}> elements keep their filters in the address with the same url-prefix ("${prefix}"). They will overwrite each other's parameters: give each its own url-prefix.`);
+    }
+    syncing.add(this);
     globalThis.addEventListener('popstate', this._onPopState);
     this._readUrl(this._ready ? 'url' : null);
   }
@@ -299,6 +310,7 @@ export class GbifOccurrenceSearch extends LitElement {
   _stopSync() {
     if (!this._syncing) return;
     this._syncing = false;
+    syncing.delete(this);
     globalThis.removeEventListener('popstate', this._onPopState);
   }
 

@@ -50,6 +50,7 @@ export class GbifOccurrenceTable extends GbifSearchConsumer {
         border-bottom: 1px solid var(--gbif-color-border, #d5dbe1);
         text-align: left;
         vertical-align: top;
+        unicode-bidi: plaintext;
       }
       .gbif-occurrence-table__table th {
         color: var(--gbif-color-muted, #596273);
@@ -206,7 +207,7 @@ export class GbifOccurrenceTable extends GbifSearchConsumer {
     const columns = this._columns;
     return html`
       <div class="gbif-occurrence-table__summary">
-        <span role="status">${this._total.toLocaleString()} occurrence${this._total === 1 ? '' : 's'}${this._total > MAX_RESULTS ? ` (the first ${MAX_RESULTS.toLocaleString()} can be paged through)` : ''}</span>
+        <span>${this._total.toLocaleString()} occurrence${this._total === 1 ? '' : 's'}${this._total > MAX_RESULTS ? ` (the first ${MAX_RESULTS.toLocaleString()} can be paged through)` : ''}</span>
       </div>
       <div class="gbif-occurrence-table__scroll" role="region" aria-label="Occurrences" tabindex="0">
         <table class="gbif-occurrence-table__table" part="table">
@@ -220,7 +221,8 @@ export class GbifOccurrenceTable extends GbifSearchConsumer {
       </div>
       ${this._pageError ? html`<p class="gbif-occurrence-table__error" role="alert">Could not load that page. Showing the previous one.</p>` : nothing}
       ${this._pageCount > 1 ? this._renderPager() : nothing}
-      <span class="gbif-visually-hidden" aria-live="polite">Page ${this._page + 1} of ${this._pageCount}</span>
+      <!-- The one thing this view announces after a search or a page change: how many, and where we are. -->
+      <span class="gbif-visually-hidden" aria-live="polite">${this._total.toLocaleString()} occurrence${this._total === 1 ? '' : 's'}. Page ${this._page + 1} of ${this._pageCount}.</span>
     `;
   }
 

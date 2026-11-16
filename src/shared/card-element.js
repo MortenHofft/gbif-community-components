@@ -1,5 +1,5 @@
 import { LitElement, html, nothing } from 'lit';
-import { resolveConfig } from './config.js';
+import { onConfigChange, resolveConfig } from './config.js';
 import { clampInt } from './format.js';
 import { tokens, cardStyles } from './styles.js';
 
@@ -18,6 +18,24 @@ export class GbifCardElement extends LitElement {
   };
 
   static styles = [tokens, cardStyles];
+
+  connectedCallback() {
+    super.connectedCallback();
+    // The labels are English. Say so, unless the page has said otherwise, so that a screen reader on a page in
+    // another language does not read them with the wrong voice.
+    if (!this.hasAttribute('lang')) this.setAttribute('lang', 'en');
+    this._stopWatchingConfig = onConfigChange(() => this.onConfigChange());
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this._stopWatchingConfig?.();
+  }
+
+  /** `configure()` changed something: draw again, and ask again if what is asked for depends on it. */
+  onConfigChange() {
+    this.requestUpdate();
+  }
 
   /** Effective `apiBase`, `siteBase`, `checklistKey` and `showSource` for this element. */
   get config() {

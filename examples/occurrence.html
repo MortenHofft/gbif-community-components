@@ -37,6 +37,7 @@
       <div class="media">
         <gbif-occurrence-images record="#r"></gbif-occurrence-images>
         <gbif-occurrence-location record="#r"></gbif-occurrence-location>
+        <gbif-occurrence-citation record="#r"></gbif-occurrence-citation>
       </div>
       <!-- One card for each Darwin Core group that has something in it. -->
       <gbif-occurrence-groups record="#r"></gbif-occurrence-groups>
@@ -48,7 +49,8 @@
     </div>
 
     <footer>
-      <gbif-attribution></gbif-attribution>
+      <!-- The names on this page are GBIF's own, not a checklist's, so the taxonomy is not credited to one. -->
+      <gbif-attribution hide-taxonomy></gbif-attribution>
     </footer>
 
     <script type="module">
@@ -79,7 +81,8 @@
 
       // From the search, "back" goes back to the same search, because its filters are in the address.
       document.querySelector('#back').addEventListener('click', (event) => {
-        if (history.length > 1 && document.referrer.includes('occurrences.html')) {
+        const from = document.referrer ? new URL(document.referrer) : null;
+        if (history.length > 1 && from?.origin === location.origin && from.pathname.endsWith('/occurrences.html')) {
           event.preventDefault();
           history.back();
         }

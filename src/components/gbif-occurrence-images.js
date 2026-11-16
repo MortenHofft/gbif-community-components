@@ -2,6 +2,7 @@ import { html, css, nothing } from 'lit';
 import { GbifRecordConsumer } from '../shared/record-consumer.js';
 import { emit } from '../shared/events.js';
 import { cleanOccurrenceKey } from '../shared/dwc.js';
+import { parseLicenseFilter } from '../shared/format.js';
 import { thumbnailUrl } from '../shared/occurrence.js';
 
 /**
@@ -17,6 +18,9 @@ import { thumbnailUrl } from '../shared/occurrence.js';
  *            browsers contact GBIF and not the publisher's server. If the cache has no picture,
  *            the publisher's file is tried, and then a message is shown with the credit.
  *            "original" shows the publishers' full-size files.
+ *   licenses which image licences to show, as on <gbif-media-gallery>: "cc0, cc-by", or "commercial".
+ *            An image whose licence is not stated is not shown when this is set. Default: all.
+ *   limit    the most images to show (1-200). Default: all.
  *
  * Also `heading`, `heading-level` and `hide-source`. The image size is `--gbif-record-image-min` (default 14rem).
  * Event: `gbif-error` when an image fails to load.
@@ -24,6 +28,8 @@ import { thumbnailUrl } from '../shared/occurrence.js';
 export class GbifOccurrenceImages extends GbifRecordConsumer {
   static properties = {
     images: { type: String },
+    licenses: { type: String },
+    limit: { type: Number },
     _fallback: { state: true },
     _broken: { state: true }
   };
@@ -98,7 +104,7 @@ export class GbifOccurrenceImages extends GbifRecordConsumer {
   _src(image) {
     const key = cleanOccurrenceKey(this.recordEl?.occurrenceKey);
     const original = this.images === 'original' || this._fallback.has(image.identifier) || !key;
-    return original ? image.identifier : thumbnailUrl({ apiBase: this.config.apiBase, occurrenceKey: key, identifier: image.identifier, width: 600 });
+    return original ? image.url : thumbnailUrl({ apiBase: this.config.apiBase, occurrenceKey: key, identifier: image.identifier, width: 600 });
   }
 
   _onError(image) {
@@ -108,7 +114,7 @@ export class GbifOccurrenceImages extends GbifRecordConsumer {
       return;
     }
     this._broken = new Set([...this._broken, image.identifier]);
-    emit(this, 'gbif-error', { component: this.localName, url: image.identifier, status: 0, message: 'Image failed to load' });
+    emit(this, 'gbif-error', { component: this.localName, url: image.url, status: 0, message: 'Image failed to load' });
   }
 
   _renderCredit(image) {
@@ -125,7 +131,7 @@ export class GbifOccurrenceImages extends GbifRecordConsumer {
   _renderImage(image) {
     const name = this.recordEl?.interpreted?.scientificName;
     const alt = image.description ?? image.title ?? `${typeof name === 'string' && name ? `Image of ${name}` : 'Image'}${image.creator ? ` by ${image.creator}` : ''}`;
-    const href = image.references ?? image.identifier;
+    const href = image.references ?? image.url;
     return html`<li>
       <figure class="gbif-images__figure">
         <a class="gbif-images__link" href=${href} target="_blank" rel="noopener" aria-label=${`Open this image at its publisher: ${alt}`}>
@@ -141,9 +147,20 @@ export class GbifOccurrenceImages extends GbifRecordConsumer {
     </li>`;
   }
 
+  /** The images to show: those the licence filter lets through, and no more than `limit`. */
+  _shown(all) {
+    const filter = parseLicenseFilter(this.licenses);
+    const allowed = filter ? all.filter((image) => filter.has(image.license?.key ?? 'unknown')) : all;
+    const limit = Number.isInteger(this.limit) && this.limit > 0 ? Math.min(this.limit, 200) : Infinity;
+    return { images: allowed.slice(0, limit), hidden: all.length - allowed.length };
+  }
+
   render() {
+    const problem = this.renderRecordProblem();
+    if (problem) return problem;
     if (!this.ready) return nothing;
-    const { images, other } = this.view.media;
+    const { other } = this.view.media;
+    const { images, hidden } = this._shown(this.view.media.images);
     if (!images.length && !other.length) return nothing;
 
     return html`
@@ -154,11 +171,12 @@ export class GbifOccurrenceImages extends GbifRecordConsumer {
         </header>
         <div class="gbif-card__body" part="body">
           ${images.length ? html`<ul class="gbif-images__grid" part="grid">${images.map((image) => this._renderImage(image))}</ul>` : nothing}
+          ${hidden ? html`<p class="gbif-images__caption">${hidden} image${hidden === 1 ? '' : 's'} not shown, because of the licence filter.</p>` : nothing}
           ${other.length
             ? html`<ul class="gbif-images__other">
                 ${other.map(
                   (media) => html`<li>
-                    <a href=${media.identifier} target="_blank" rel="noopener">${media.title ?? media.type ?? 'Media'}${media.format ? ` (${media.format})` : ''}</a>
+                    <a href=${media.url} target="_blank" rel="noopener">${media.title ?? media.type ?? 'Media'}${media.format ? ` (${media.format})` : ''}</a>
                     ${media.type ? html`<span class="gbif-images__caption"> · ${media.type}</span>` : nothing}
                     ${media.license ? html` · <a class="gbif-images__caption" href=${media.license.url} target="_blank" rel="noopener">${media.license.label}</a>` : nothing}
                   </li>`

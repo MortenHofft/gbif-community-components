@@ -1,4 +1,5 @@
 import { html, nothing } from 'lit';
+import { ref } from 'lit/directives/ref.js';
 import { GbifCardElement } from './card-element.js';
 import { resolveTaxon } from './taxon.js';
 import { emit } from './events.js';
@@ -54,6 +55,11 @@ export class GbifTaxonElement extends GbifCardElement {
       this.onTaxonReset();
       this.onTaxonReady(this._taxon, () => run === this._runId);
     }
+  }
+
+  onConfigChange() {
+    if (this.taxonKey || this.scientificName) this._resolve();
+    else super.onConfigChange();
   }
 
   async _resolve() {
@@ -125,7 +131,7 @@ export class GbifTaxonElement extends GbifCardElement {
    */
   renderReserved(heightCss, loading) {
     return this.reserveSpace && loading
-      ? html`<div class="gbif-card" part="card" style=${`min-height: ${heightCss}`} aria-hidden="true"></div>`
+      ? html`<div class="gbif-card" part="card" ${ref((el) => el && (el.style.minHeight = heightCss))} aria-hidden="true"></div>`
       : nothing;
   }
 

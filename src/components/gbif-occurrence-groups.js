@@ -2,6 +2,9 @@ import { html, css, nothing } from 'lit';
 import { GbifRecordConsumer } from '../shared/record-consumer.js';
 
 /** Group names a page may use: the key (`geological-context`) or the label (`Geological context`), in any case. */
+/** What `hide-terms="people"` leaves out: the terms that name people. */
+const PEOPLE_TERMS = ['recordedBy', 'recordedByID', 'identifiedBy', 'identifiedByID', 'georeferencedBy'];
+
 const normalize = (name) => String(name).toLowerCase().replace(/[\s_]+/g, '-');
 
 /**
@@ -17,13 +20,16 @@ const normalize = (name) => String(name).toLowerCase().replace(/[\s_]+/g, '-');
  *   groups   which groups to show and in what order: a list of group names such as
  *            "location event". Default: every group that has something, in Darwin Core's order.
  *            Several elements, each with its own `groups`, put the cards wherever the page wants them.
+ *   hide-terms  terms to leave out, by name ("recordedBy identifiedBy"). "people" stands for the terms that name
+ *            people: recordedBy, recordedByID, identifiedBy, identifiedByID and georeferencedBy.
  *
  * Also `heading` (only when a single group is shown), `heading-level` and `hide-source`.
  * Layout: the cards fill the width in columns at least `--gbif-group-min-width` wide (default 22rem).
  */
 export class GbifOccurrenceGroups extends GbifRecordConsumer {
   static properties = {
-    groups: { type: String }
+    groups: { type: String },
+    hideTerms: { type: String, attribute: 'hide-terms' }
   };
 
   static styles = [
@@ -57,6 +63,7 @@ export class GbifOccurrenceGroups extends GbifRecordConsumer {
         display: grid;
         gap: 0.5rem 0;
         margin: 0;
+        container-type: inline-size;
       }
       .gbif-groups__row {
         display: grid;
@@ -69,6 +76,13 @@ export class GbifOccurrenceGroups extends GbifRecordConsumer {
         border-bottom: 0;
         padding-bottom: 0;
       }
+      /* In a narrow card the term goes above its value; side by side, a word of the value would get a line to itself. */
+      @container (max-width: 20rem) {
+        .gbif-groups__row {
+          grid-template-columns: 1fr;
+          gap: 0;
+        }
+      }
       .gbif-groups__term {
         margin: 0;
         color: var(--gbif-color-muted, #596273);
@@ -76,6 +90,7 @@ export class GbifOccurrenceGroups extends GbifRecordConsumer {
       }
       .gbif-groups__value {
         margin: 0;
+        unicode-bidi: plaintext;
         min-width: 0;
         overflow-wrap: anywhere;
       }
@@ -95,6 +110,14 @@ export class GbifOccurrenceGroups extends GbifRecordConsumer {
     return [...new Set(wanted)].map((name) => all.find((g) => g.key === name || normalize(g.label) === name)).filter(Boolean);
   }
 
+  /** The groups without the terms the page asked to leave out; a group left with no rows goes too. */
+  _withoutHidden(groups) {
+    if (typeof this.hideTerms !== 'string' || !this.hideTerms.trim()) return groups;
+    const words = this.hideTerms.split(/[\s,]+/).filter(Boolean).map((w) => w.toLowerCase());
+    const hidden = new Set(words.flatMap((w) => (w === 'people' ? PEOPLE_TERMS : [w])).map((w) => w.toLowerCase()));
+    return groups.map((g) => ({ ...g, rows: g.rows.filter((row) => !hidden.has(row.name.toLowerCase())) })).filter((g) => g.rows.length);
+  }
+
   _renderRow(row) {
     return html`<div class="gbif-groups__row">
       <dt class="gbif-groups__term" title=${row.uri ?? ''}>${row.label}</dt>
@@ -110,8 +133,10 @@ export class GbifOccurrenceGroups extends GbifRecordConsumer {
   }
 
   render() {
+    const problem = this.renderRecordProblem();
+    if (problem) return problem;
     if (!this.ready) return nothing;
-    const groups = this._chosen(this.view.groups);
+    const groups = this._chosen(this._withoutHidden(this.view.groups));
     if (!groups.length) return nothing;
 
     return html`

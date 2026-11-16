@@ -52,6 +52,9 @@ export class GbifOccurrenceGallery extends GbifSearchConsumer {
         padding: 0;
         list-style: none;
       }
+      .gbif-occurrence-gallery__figure {
+        margin: 0;
+      }
       .gbif-occurrence-gallery__tile {
         margin: 0;
         min-width: 0;
@@ -197,7 +200,7 @@ export class GbifOccurrenceGallery extends GbifSearchConsumer {
   _src(tile) {
     const useOriginal = this.images === 'original' || this._fallback.has(tile.identifier);
     return useOriginal
-      ? tile.identifier
+      ? tile.url
       : thumbnailUrl({ apiBase: this.config.apiBase, occurrenceKey: tile.occurrenceKey, identifier: tile.identifier });
   }
 
@@ -208,21 +211,21 @@ export class GbifOccurrenceGallery extends GbifSearchConsumer {
       return;
     }
     this._broken = new Set([...this._broken, tile.identifier]);
-    emit(this, 'gbif-error', { component: this.localName, url: tile.identifier, status: 0, message: 'Image failed to load' });
+    emit(this, 'gbif-error', { component: this.localName, url: tile.url, status: 0, message: 'Image failed to load' });
   }
 
   _renderTile(tile) {
     const siteBase = this.config.siteBase;
-    const by = tile.rightsHolder ? `, photo by ${tile.rightsHolder}` : '';
-    const alt = `${tile.name ?? 'Occurrence image'}${tile.country ? ` (${tile.country})` : ''}${by}`;
+    // What the picture shows. Who made it is in the caption; the alt text does not guess a role (a rights holder is not always the photographer).
+    const alt = `${tile.name ?? 'Occurrence image'}${tile.country ? ` (${tile.country})` : ''}`;
     return html`<li class="gbif-occurrence-gallery__tile">
-      <figure style="margin:0">
+      <figure class="gbif-occurrence-gallery__figure">
         <a
           class="gbif-occurrence-gallery__link"
           href=${occurrenceUrl(siteBase, tile.occurrenceKey)}
           target="_blank"
           rel="noopener"
-          aria-label=${`Open this occurrence on GBIF.org: ${alt}`}
+          aria-label=${`View this occurrence: ${alt}`}
           @click=${(event) => linkIntent(this, event, 'gbif-occurrence-select', { occurrenceKey: tile.occurrenceKey, source: 'gallery' })}
         >
           ${this._broken.has(tile.identifier)
@@ -254,7 +257,7 @@ export class GbifOccurrenceGallery extends GbifSearchConsumer {
       return html`<p class="gbif-card__state" role="status">No images match these filters.</p>`;
     }
     return html`
-      <p class="gbif-occurrence-gallery__summary" role="status">${this._total.toLocaleString()} occurrence${this._total === 1 ? '' : 's'} with images</p>
+      <p class="gbif-occurrence-gallery__summary">${this._total.toLocaleString()} occurrence${this._total === 1 ? '' : 's'} with images</p>
       <ul class="gbif-occurrence-gallery__grid" part="grid">${this._tiles.map((tile) => this._renderTile(tile))}</ul>
       ${this._pageError ? html`<p class="gbif-occurrence-gallery__error" role="alert">Could not load that page. Showing the previous one.</p>` : nothing}
       ${this._pageCount > 1
@@ -264,7 +267,7 @@ export class GbifOccurrenceGallery extends GbifSearchConsumer {
             <button type="button" class="gbif-button" aria-disabled=${this._page >= this._pageCount - 1 || this._loading ? 'true' : 'false'} @click=${() => this._goTo(this._page + 1)}>Next ›</button>
           </div>`
         : nothing}
-      <span class="gbif-visually-hidden" aria-live="polite">Page ${this._page + 1} of ${this._pageCount}</span>
+      <span class="gbif-visually-hidden" aria-live="polite">${this._total.toLocaleString()} occurrence${this._total === 1 ? '' : 's'} with images. Page ${this._page + 1} of ${this._pageCount}.</span>
     `;
   }
 

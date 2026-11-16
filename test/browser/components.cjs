@@ -155,13 +155,15 @@ function evalPredicate(p, r) {
 }
 const FACET_PICK = { COUNTRY: (r) => r.countryCode, BASIS_OF_RECORD: (r) => r.basisOfRecord, LICENSE: (r) => r._license };
 
+const DATASET_UUID = '11111111-2222-4333-8444-555555555555';
+
 /* Occurrence records for the record page: a museum specimen with everything, and some awkward ones. */
 const DWC_NS = 'http://rs.tdwg.org/dwc/terms/';
 function makeOccurrences() {
   const mof = (type, value, unit) => ({ [`${DWC_NS}measurementType`]: type, [`${DWC_NS}measurementValue`]: value, ...(unit ? { [`${DWC_NS}measurementUnit`]: unit } : {}) });
   const rich = {
     interpreted: {
-      key: 7001, gbifID: '7001', datasetKey: 'ds-1', publishingOrgKey: 'org-1', publishingCountry: 'GB', protocol: 'DWC_ARCHIVE', lastInterpreted: '2026-01-02T03:04:05.000+00:00', crawlId: 3,
+      key: 7001, gbifID: '7001', datasetKey: DATASET_UUID, publishingOrgKey: 'org-1', publishingCountry: 'GB', protocol: 'DWC_ARCHIVE', lastInterpreted: '2026-01-02T03:04:05.000+00:00', crawlId: 3,
       basisOfRecord: 'PRESERVED_SPECIMEN', occurrenceStatus: 'PRESENT', institutionCode: 'NHMUK', collectionCode: 'BMNH', catalogNumber: 'BM 1940.1.3.1',
       datasetName: 'Natural History Museum Collection', occurrenceID: 'https://example.org/specimen/1', recordedBy: 'J Delacour|W P. Lowe',
       license: 'http://creativecommons.org/licenses/by/4.0/legalcode', references: 'https://example.org/specimen/1', rightsHolder: 'The Trustees',
@@ -179,7 +181,7 @@ function makeOccurrences() {
       extensions: {}, facts: [], relations: [], identifiers: []
     },
     verbatim: {
-      key: 7001, datasetKey: 'ds-1',
+      key: 7001, datasetKey: DATASET_UUID,
       [`${DWC_NS}habitat`]: 'montane forest',
       [`${DWC_NS}eventDate`]: '1940-01-03T00:00:00Z',
       [`${DWC_NS}countryCode`]: 'CL',
@@ -204,7 +206,30 @@ function makeOccurrences() {
   };
   const manyRows = { interpreted: { key: 7006, gbifID: '7006', scientificName: 'Many rows', media: [], extensions: {} }, verbatim: { key: 7006, extensions: { 'http://rs.tdwg.org/dwc/terms/MeasurementOrFact': Array.from({ length: 130 }, (_, i) => mof(`m${i}`, i)) } } };
   const verbatimFails = { interpreted: { ...bare.interpreted, key: 7005, gbifID: '7005', locality: 'Somewhere' }, verbatim: null, failVerbatim: true };
-  return { 7001: rich, 7002: bare, 7003: hostile, 7005: verbatimFails, 7006: manyRows, 7500: { fail: true } };
+  // Records whose location should not be taken at face value.
+  const located = (key, interpreted) => ({ interpreted: { key, gbifID: String(key), scientificName: 'Located thing', datasetKey: DATASET_UUID, media: [], extensions: {}, ...interpreted }, verbatim: { key } });
+  const licenceMix = {
+    interpreted: {
+      key: 8006, gbifID: '8006', scientificName: 'Many images', media: [
+        { type: 'StillImage', identifier: 'https://img.test/m-1.png', license: `${CC}/by/4.0/`, creator: 'A' },
+        { type: 'StillImage', identifier: 'https://img.test/m-2.png', license: `${CC}/by-nc/4.0/`, creator: 'B' },
+        { type: 'StillImage', identifier: 'https://img.test/m-3.png', license: 'http://creativecommons.org/publicdomain/zero/1.0/', creator: 'C' },
+        { type: 'StillImage', identifier: 'https://img.test/m-4.png', creator: 'D' },
+        { type: 'StillImage', identifier: 'https://img.test/m-5.png', license: `${CC}/by/4.0/`, creator: 'E' }
+      ], extensions: {}
+    },
+    verbatim: { key: 8006 }
+  };
+  return {
+    7001: rich, 7002: bare, 7003: hostile, 7005: verbatimFails, 7006: manyRows, 7500: { fail: true },
+    8001: located(8001, { decimalLatitude: 0, decimalLongitude: 0, issues: ['ZERO_COORDINATE'], hasGeospatialIssues: true }),
+    8002: located(8002, { decimalLatitude: 89.95, decimalLongitude: 10 }),
+    8003: located(8003, { decimalLatitude: 51.12, decimalLongitude: 5.5, coordinatePrecision: 0.1, issues: ['COORDINATE_ROUNDED'] }),
+    8004: located(8004, { decimalLatitude: 10, decimalLongitude: 10, coordinateUncertaintyInMeters: 9_000_000 }),
+    8005: located(8005, { decimalLatitude: 51.1, decimalLongitude: 5.5, dataGeneralizations: 'generalised to 0.1° to protect a nesting site', informationWithheld: 'exact locality withheld' }),
+    8006: licenceMix,
+    8007: located(8007, { informationWithheld: 'Coordinates withheld for a threatened species', country: 'Chile', locality: 'Torres del Paine' })
+  };
 }
 
 /** An occurrence from the search dataset, as a full record, so that a result can be opened. */
@@ -333,6 +358,15 @@ async function installStubs(page, S) {
       return TAXA[m[1]] ? json(route, TAXA[m[1]]) : route.fulfill({ headers: { 'access-control-allow-origin': '*' }, status: 404, body: 'Taxon does not exist' });
     }
     if ((m = /^\/v1\/occurrence\/(\d+)(\/verbatim)?$/.exec(p))) return occurrenceRecord(route, m[1], !!m[2]);
+    if ((m = /^\/v1\/dataset\/([0-9a-f-]{36})$/.exec(p))) {
+      (page.datasetRequests ??= []).push(m[1]);
+      if (S.datasetHook) {
+        const hooked = await S.datasetHook(m[1]);
+        if (hooked?.status) return route.fulfill({ headers: { 'access-control-allow-origin': '*' }, status: hooked.status, body: 'error' });
+      }
+      // A real dataset answer is large (it lists every contact and endpoint); only these fields are used.
+      return json(route, { key: m[1], title: 'Natural History Museum Collection', doi: '10.15468/abc123', homepage: 'https://example.org/collection', license: 'http://creativecommons.org/licenses/by/4.0/legalcode', citation: { text: 'NHM (2026). Natural History Museum Collection. Occurrence dataset https://doi.org/10.15468/abc123 accessed via GBIF.org on 2026-11-16.' }, contacts: Array.from({ length: 50 }, (_, i) => ({ firstName: `P${i}` })) });
+    }
     if (p === '/v1/occurrence/search/predicate' && method === 'POST') return predicateSearch(route, body);
     if (p === '/v1/occurrence/search') {
       if (q.has('typeStatus')) {
@@ -1387,7 +1421,7 @@ async function run() {
     await norway.focus();
     await page.keyboard.press('Space');
     await waitTotal(page, 15);
-    assert.equal(await page.locator('gbif-occurrence-filters [role=status]').first().textContent().then((t) => t.trim()), '15 occurrences');
+    assert.equal(await page.locator('gbif-occurrence-filters .gbif-occurrence-filters__total').first().textContent().then((t) => t.trim()), '15 occurrences');
     assert.deepEqual(await page.locator('gbif-occurrence-filters [role=heading]').getAttribute('aria-level'), '2');
   });
 
@@ -1747,12 +1781,14 @@ async function run() {
     assert.match(await page.locator('gbif-occurrence-location .leaflet-control-attribution').textContent(), /OpenStreetMap/);
   });
 
-  await test('record: no coordinates, no map; a bare record shows only the cards it has something for', async (make) => {
+  await test('record: no coordinates, no map but the location card says so; a bare record shows only the cards it has something for', async (make) => {
     const page = await make();
     await page.mount(RECORD(7002));
     await page.locator('gbif-occurrence-groups section').first().waitFor(T);
     await sleep(400);
-    assert.equal(await page.locator('gbif-occurrence-location .gbif-card').count(), 0, 'no map');
+    assert.equal(await page.locator('gbif-occurrence-location .gbif-card').count(), 1, 'the location card is always there');
+    assert.match(await page.locator('gbif-occurrence-location .gbif-card').textContent(), /This record has no usable coordinates, so there is no map\./);
+    assert.equal(await page.locator('gbif-occurrence-location .leaflet-container').count(), 0, 'no map');
     assert.equal(await page.locator('gbif-occurrence-images .gbif-card').count(), 0, 'no images');
     assert.equal(await page.locator('gbif-occurrence-extensions .gbif-card').count(), 0, 'no extensions');
     assert.deepEqual(await groupTitles(page), ['Record-level', 'Location', 'Taxon', 'GBIF processing'], 'only the groups the record has something for, in the standard\'s order');
@@ -1845,7 +1881,7 @@ async function run() {
     assert.equal(await page.locator('gbif-occurrence-images .gbif-card').count(), 0);
     await page.locator('gbif-occurrence-groups section[data-group="taxon"]').waitFor(T);
     assert.match(await page.locator('gbif-occurrence-groups').evaluate((e) => e.shadowRoot.textContent), /Plain thing/);
-    assert.equal(await page.locator('gbif-occurrence-location .gbif-card').count(), 0);
+    assert.match(await page.locator('gbif-occurrence-location .gbif-card').textContent(), /no usable coordinates/);
     const loads = (await page.events('gbif-record-load')).map((e) => e.detail.occurrenceKey);
     assert.deepEqual(loads, ['7001', '7002']);
     const changes = (await page.events('gbif-record-change')).map((e) => e.detail.status);
@@ -2159,6 +2195,427 @@ async function run() {
     await waitTotal(page, 15);
     const search = await page.evaluate(() => location.search);
     assert.equal(search, '?ref=a%20b&flag&semi=a;b&gbif_country=NO');
+  });
+
+  /* ---------- Review 2: the record page ---------- */
+
+  const mapZoom = (page, sel = 'gbif-occurrence-location') => page.evaluate((x) => document.querySelector(x)._map.getZoom(), sel);
+  const notes = (page) => page.locator('gbif-occurrence-location .gbif-location__notes li').allTextContents().then((t) => t.map((x) => x.replace(/\s+/g, ' ').trim()));
+
+  await test('location: an exact point has no notice and may be zoomed in on', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7001));
+    await mapReady(page, 'gbif-occurrence-location');
+    assert.deepEqual(await notes(page), []);
+    assert.equal(await page.locator('gbif-occurrence-location [role=region]').getAttribute('aria-label'), 'Map of where Puma concolor araucanus (Osgood, 1943) was recorded');
+    assert.ok((await mapZoom(page)) > 8, 'zoomed in on a point known to 30 m');
+  });
+
+  await test('location: a generalised location is labelled, drawn as approximate, and not zoomed in on', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(8005));
+    await mapReady(page, 'gbif-occurrence-location');
+    const text = await notes(page);
+    assert.equal(text.length, 2);
+    assert.match(text[0], /^Generalised location\. The location was made less exact on purpose: generalised to 0\.1° to protect a nesting site$/);
+    assert.match(text[1], /^Withheld\. Information was withheld: exact locality withheld$/);
+    assert.ok((await mapZoom(page)) <= 8, `zoom ${await mapZoom(page)}`);
+    assert.equal(await page.evaluate(() => document.querySelector('gbif-occurrence-location')._map.getMaxZoom()), 8, 'a visitor cannot zoom past what the coordinates support');
+    assert.match(await page.locator('gbif-occurrence-location [role=region]').getAttribute('aria-label'), /\(approximate\)$/);
+    assert.ok(await page.locator('gbif-occurrence-location path[stroke-dasharray]').count() >= 1, 'drawn dashed, not as an exact place');
+    assert.equal(await page.locator('gbif-occurrence-location [role=note]').getAttribute('aria-label'), 'About this location');
+  });
+
+  await test('location: coordinates GBIF flagged (0,0) are shown, with a warning, at a regional zoom', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(8001));
+    await mapReady(page, 'gbif-occurrence-location');
+    assert.deepEqual(await notes(page), ['Unreliable location. Do not rely on this location: the coordinates are 0°, 0°.']);
+    assert.ok((await mapZoom(page)) <= 8);
+    assert.deepEqual(page.errors, []);
+  });
+
+  await test('location: rounded coordinates and a huge uncertainty are said to be approximate; the huge circle is not drawn', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(8003));
+    await mapReady(page, 'gbif-occurrence-location');
+    assert.match((await notes(page))[0], /^Approximate location\. The coordinates are rounded to 0\.1° \(about 11 km\)/);
+    await page.mount(RECORD(8004));
+    await mapReady(page, 'gbif-occurrence-location');
+    assert.match((await notes(page))[0], /uncertain by 9,000 km/);
+    assert.equal(await page.locator('gbif-occurrence-location path.leaflet-interactive').count(), 1, 'the marker only: a circle of 9,000 km says nothing');
+    assert.match(await page.locator('gbif-occurrence-location .gbif-location__coordinates').textContent(), /± 9,000,000 m/);
+    assert.deepEqual(page.errors, []);
+  });
+
+  await test('location: a point at the pole and a record with no coordinates are both handled', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(8002));
+    await mapReady(page, 'gbif-occurrence-location');
+    assert.match(await page.locator('gbif-occurrence-location .gbif-location__coordinates').textContent(), /89\.95° N, 10° E/);
+    await page.mount(RECORD(8007));
+    await page.locator('gbif-occurrence-location .gbif-card').waitFor(T);
+    assert.match((await notes(page))[0], /^Withheld\. Information was withheld: Coordinates withheld for a threatened species$/);
+    const card = await page.locator('gbif-occurrence-location .gbif-card').textContent();
+    assert.match(card, /no usable coordinates/);
+    assert.match(card, /Place named in the record: Torres del Paine, Chile/);
+    assert.deepEqual(page.errors, []);
+  });
+
+  await test('images: licences filter what is shown (unlicensed images too), a limit applies, and later changes are followed', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(8006));
+    await page.locator('gbif-occurrence-images figure').first().waitFor(T);
+    assert.equal(await page.locator('gbif-occurrence-images figure').count(), 5);
+    await page.evaluate(() => document.querySelector('gbif-occurrence-images').setAttribute('licenses', 'cc0, cc-by'));
+    await page.waitForFunction(() => document.querySelector('gbif-occurrence-images').shadowRoot.querySelectorAll('figure').length === 3, null, T);
+    assert.match(await page.locator('gbif-occurrence-images').evaluate((e) => e.shadowRoot.textContent), /2 images not shown, because of the licence filter\./);
+    assert.ok(!(await page.locator('gbif-occurrence-images').evaluate((e) => e.shadowRoot.textContent)).includes('Licence not stated'), 'the unlicensed image is not shown');
+    await page.evaluate(() => document.querySelector('gbif-occurrence-images').setAttribute('limit', '2'));
+    await page.waitForFunction(() => document.querySelector('gbif-occurrence-images').shadowRoot.querySelectorAll('figure').length === 2, null, T);
+    await page.evaluate(() => document.querySelector('gbif-occurrence-images').removeAttribute('licenses'));
+    await page.waitForFunction(() => document.querySelector('gbif-occurrence-images').shadowRoot.querySelectorAll('figure').length === 2, null, T);
+    await page.evaluate(() => document.querySelector('gbif-occurrence-images').removeAttribute('limit'));
+    await page.waitForFunction(() => document.querySelector('gbif-occurrence-images').shadowRoot.querySelectorAll('figure').length === 5, null, T);
+  });
+
+  await test('citation: dataset and record links, licence, the dataset\'s own citation and DOI, one request for the dataset', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7001, CARDS + '<gbif-occurrence-citation record="#r"></gbif-occurrence-citation>'));
+    await page.locator('gbif-occurrence-citation a', { hasText: '10.15468/abc123' }).waitFor(T);
+    const links = await page.locator('gbif-occurrence-citation a').evaluateAll((as) => as.map((a) => [a.textContent.trim(), a.href]));
+    assert.deepEqual(links, [
+      ['Natural History Museum Collection', `https://www.gbif.org/dataset/${'11111111-2222-4333-8444-555555555555'}`],
+      ['GBIF occurrence 7001', 'https://www.gbif.org/occurrence/7001'],
+      ['CC BY 4.0', 'http://creativecommons.org/licenses/by/4.0/legalcode'],
+      ['10.15468/abc123', 'https://doi.org/10.15468/abc123']
+    ]);
+    const text = await page.locator('gbif-occurrence-citation').evaluate((e) => e.shadowRoot.textContent.replace(/\s+/g, ' '));
+    assert.match(text, /Cite the dataset\s*NHM \(2026\)\. Natural History Museum Collection\./);
+    assert.match(text, /Rights holder\s*The Trustees/);
+    assert.equal(page.datasetRequests.length, 1);
+    assert.deepEqual(page.errors, []);
+  });
+
+  await test('citation: a failed dataset request leaves the rest, says so, and tells the page; site-base is used for links', async (make) => {
+    const S = freshState();
+    S.datasetHook = async () => ({ status: 500 });
+    const page = await make(S);
+    await page.mount(RECORD(7001, '<gbif-occurrence-citation record="#r"></gbif-occurrence-citation>', 'site-base="https://example.org"'));
+    await page.locator('gbif-occurrence-citation .gbif-citation__row', { hasText: 'could not be loaded' }).waitFor(T);
+    const links = await page.locator('gbif-occurrence-citation a').evaluateAll((as) => as.map((a) => a.href));
+    assert.ok(links.includes('https://example.org/occurrence/7001'), links.join());
+    assert.ok(links.includes('https://example.org/dataset/11111111-2222-4333-8444-555555555555'));
+    assert.ok((await page.events('gbif-error')).some((e) => e.tag === 'gbif-occurrence-citation'));
+    // A record with no dataset key asks for no dataset at all.
+    page.datasetRequests = [];
+    await page.mount(RECORD(7002, '<gbif-occurrence-citation record="#r"></gbif-occurrence-citation>'));
+    await page.locator('gbif-occurrence-citation a', { hasText: 'GBIF occurrence 7002' }).waitFor(T);
+    assert.equal(page.datasetRequests.length, 0);
+  });
+
+  await test('attribution: hide-taxonomy leaves out the checklist, and asks nothing about it', async (make) => {
+    const page = await make();
+    await page.mount('<gbif-attribution hide-taxonomy>Extra.</gbif-attribution>');
+    await page.locator('gbif-attribution', { hasText: 'Biodiversity data from' }).waitFor(T);
+    await sleep(300);
+    assert.ok(!(await page.locator('gbif-attribution').evaluate((e) => e.shadowRoot.textContent)).includes('Taxonomy'));
+    assert.ok(!page.requests.some((r) => /checklist/.test(r.path)));
+    await page.mount('<gbif-attribution></gbif-attribution>');
+    await page.locator('gbif-attribution', { hasText: 'Taxonomy: Catalogue of Life' }).waitFor(T);
+  });
+
+  await test('extensions: names may be separated by spaces, and heading names a single card', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7001, '<gbif-occurrence-extensions record="#r" exclude="Multimedia MeasurementOrFact"></gbif-occurrence-extensions>'));
+    await page.locator('gbif-occurrence-extensions section').first().waitFor(T);
+    assert.deepEqual(await page.locator('gbif-occurrence-extensions [role=heading]').allTextContents(), ['Resource relationship (1)', 'DNA derived data (1)']);
+    await page.mount(RECORD(7001, '<gbif-occurrence-extensions record="#r" only="DNADerivedData" heading="Sequences"></gbif-occurrence-extensions>'));
+    await page.locator('gbif-occurrence-extensions section').first().waitFor(T);
+    assert.deepEqual(await page.locator('gbif-occurrence-extensions [role=heading]').allTextContents(), ['Sequences']);
+  });
+
+  await test('cards: one added before its record, one whose record is replaced, and one with no record at all', async (make) => {
+    const page = await make();
+    await page.mount('<gbif-occurrence-groups record="#r"></gbif-occurrence-groups>');
+    await page.locator('gbif-occurrence-groups [role=alert]', { hasText: 'No occurrence record was found' }).waitFor(T);
+    // The record appears later (a framework that builds the page in script): the card finds it.
+    await page.evaluate(() => {
+      const record = document.createElement('gbif-occurrence-record');
+      record.id = 'r';
+      record.setAttribute('occurrence-key', '7001');
+      document.body.append(record);
+    });
+    await page.locator('gbif-occurrence-groups section[data-group="taxon"]').waitFor(T);
+    assert.match(await page.locator('gbif-occurrence-groups').evaluate((e) => e.shadowRoot.textContent), /Puma concolor araucanus/);
+    // The record is replaced by another with the same id (a keyed re-render): the card follows the new one.
+    await page.evaluate(() => {
+      document.querySelector('#r').remove();
+      const record = document.createElement('gbif-occurrence-record');
+      record.id = 'r';
+      record.setAttribute('occurrence-key', '7002');
+      document.body.append(record);
+    });
+    await page.waitForFunction(() => /Plain thing/.test(document.querySelector('gbif-occurrence-groups').shadowRoot.textContent) && !/araucanus/.test(document.querySelector('gbif-occurrence-groups').shadowRoot.textContent), null, T);
+    // Removed and not replaced: it says so rather than showing the old record.
+    await page.evaluate(() => document.querySelector('#r').remove());
+    await page.locator('gbif-occurrence-groups [role=alert]', { hasText: 'No occurrence record was found' }).waitFor(T);
+    assert.deepEqual(page.errors, []);
+  });
+
+  await test('search consumers: a search added later or replaced is followed as well', async (make) => {
+    const page = await make();
+    await page.mount('<gbif-occurrence-table search="#s"></gbif-occurrence-table>');
+    await page.locator('gbif-occurrence-table [role=alert]', { hasText: 'No occurrence search was found' }).waitFor(T);
+    await page.evaluate(() => {
+      const search = document.createElement('gbif-occurrence-search');
+      search.id = 's';
+      search.setAttribute('taxon-key', '4QHKG');
+      document.body.append(search);
+    });
+    await waitTotal(page, 60);
+    await page.evaluate(() => {
+      document.querySelector('#s').remove();
+      const search = document.createElement('gbif-occurrence-search');
+      search.id = 's';
+      search.setAttribute('taxon-key', '4QHKG');
+      search.setAttribute('country', 'NO');
+      document.body.append(search);
+    });
+    await waitTotal(page, 15);
+  });
+
+  await test('configuration: GbifComponentsConfig set before the bundle applies to the very first request; configure() later makes components ask again', async (make) => {
+    const page = await make(freshState(), { init: () => { window.GbifComponentsConfig = { apiBase: '/gbif-proxy', showSource: false }; } });
+    await page.mount(ALL_VIEWS());
+    await waitTotal(page, 60);
+    assert.ok(page.requests.length > 0);
+    assert.ok(page.requests.every((r) => r.host !== 'api.gbif.org'), 'nothing went to GBIF directly: ' + page.requests.filter((r) => r.host === 'api.gbif.org').map((r) => r.full).join());
+    assert.ok(page.requests.some((r) => r.full.includes('/gbif-proxy/v1/occurrence/search')));
+    // Later, configure() changes what is asked: components that have asked already ask again.
+    page.requests.length = 0;
+    await page.evaluate(() => GbifComponents.configure({ apiBase: 'https://api.gbif.org' }));
+    await page.waitForFunction(() => true);
+    await sleep(600);
+    assert.ok(page.requests.some((r) => r.host === 'api.gbif.org' && r.path === '/v1/occurrence/search'), 'asked again, now at the new address');
+    // A change that does not matter to requests (the same values) asks for nothing.
+    page.requests.length = 0;
+    await page.evaluate(() => GbifComponents.configure({ apiBase: 'https://api.gbif.org' }));
+    await sleep(300);
+    assert.equal(page.requests.filter((r) => r.path.startsWith('/v1/occurrence/search')).length, 0);
+  });
+
+  await test('configuration: a record and its attribution ask again when configure() changes the address', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7002, '<gbif-occurrence-groups record="#r"></gbif-occurrence-groups>'));
+    await page.locator('gbif-occurrence-groups section').first().waitFor(T);
+    page.requests.length = 0;
+    await page.evaluate(() => GbifComponents.configure({ apiBase: '/gbif-proxy' }));
+    await sleep(600);
+    assert.ok(page.requests.some((r) => r.full.includes('/gbif-proxy/v1/occurrence/7002')), page.requests.map((r) => r.full).join());
+    await page.evaluate(() => GbifComponents.configure({ apiBase: null }));
+  });
+
+  await test('layout: a table in a narrow grid column scrolls inside its card and does not widen the page', async (make) => {
+    const page = await make(freshState(), { width: 320 });
+    await page.mount('<div style="display:grid;grid-template-columns:1fr;padding:0"><gbif-occurrence-search id="s" taxon-key="4QHKG"></gbif-occurrence-search><gbif-occurrence-table search="#s"></gbif-occurrence-table></div>');
+    await waitTotal(page, 60);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= 320), `scrollWidth ${await page.evaluate(() => document.documentElement.scrollWidth)}`);
+  });
+
+  await test('layout: in a narrow card a term goes above its value', async (make) => {
+    const page = await make();
+    await page.mount('<div style="width:150px"><gbif-occurrence-record id="r" occurrence-key="7001"></gbif-occurrence-record><gbif-occurrence-groups record="#r" groups="location"></gbif-occurrence-groups></div>');
+    await page.locator('gbif-occurrence-groups .gbif-groups__row').first().waitFor(T);
+    const columns = await page.locator('gbif-occurrence-groups .gbif-groups__row').first().evaluate((row) => getComputedStyle(row).gridTemplateColumns.split(' ').length);
+    assert.equal(columns, 1);
+    await page.mount('<div style="width:600px"><gbif-occurrence-record id="r" occurrence-key="7001"></gbif-occurrence-record><gbif-occurrence-groups record="#r" groups="location"></gbif-occurrence-groups></div>');
+    await page.locator('gbif-occurrence-groups .gbif-groups__row').first().waitFor(T);
+    assert.equal(await page.locator('gbif-occurrence-groups .gbif-groups__row').first().evaluate((row) => getComputedStyle(row).gridTemplateColumns.split(' ').length), 2);
+  });
+
+  await test('accessibility: the labels say they are English, a page can say otherwise, and one change is announced once per view', async (make) => {
+    const page = await make();
+    await page.mount(ALL_VIEWS() + '<gbif-occurrence-table search="#s" lang="de" id="de"></gbif-occurrence-table>');
+    await waitTotal(page, 60);
+    assert.equal(await page.locator('gbif-occurrence-filters').getAttribute('lang'), 'en');
+    assert.equal(await page.locator('#de').getAttribute('lang'), 'de', 'the page\'s own lang is left alone');
+    // Nothing in the panel, the table or the gallery is a status region any more; each table and gallery has one polite line.
+    const live = await page.evaluate(() =>
+      ['gbif-occurrence-filters', 'gbif-occurrence-table', 'gbif-occurrence-gallery'].map((tag) => [tag, document.querySelector(tag).shadowRoot.querySelectorAll('[role=status]').length, [...document.querySelector(tag).shadowRoot.querySelectorAll('[aria-live]')].map((e) => e.textContent.trim())])
+    );
+    assert.deepEqual(live[0], ['gbif-occurrence-filters', 0, []]);
+    assert.deepEqual(live[1], ['gbif-occurrence-table', 0, ['60 occurrences. Page 1 of 6.']]);
+    assert.deepEqual(live[2].slice(0, 2), ['gbif-occurrence-gallery', 0]);
+    assert.match(live[2][2][0], /^20 occurrences with images\. Page 1 of 2\.$/);
+  });
+
+  /* ---------- Review 2: what the reviewers' mutations showed was not tested ---------- */
+
+  await test('groups: hide-terms leaves terms out by name, "people" the people, and a group with nothing left goes', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7001, '<gbif-occurrence-groups record="#r" hide-terms="people"></gbif-occurrence-groups>'));
+    await page.locator('gbif-occurrence-groups section').first().waitFor(T);
+    const all = async () => (await page.locator('gbif-occurrence-groups dt').allTextContents()).map((t) => t.trim());
+    let labels = await all();
+    for (const gone of ['Recorded by', 'Identified by']) assert.ok(!labels.includes(gone), gone);
+    assert.ok(labels.includes('Type status') && labels.includes('Locality'));
+    await page.evaluate(() => document.querySelector('gbif-occurrence-groups').setAttribute('hide-terms', 'locality, Preparations'));
+    await page.waitForFunction(() => ![...document.querySelector('gbif-occurrence-groups').shadowRoot.querySelectorAll('dt')].some((d) => d.textContent.trim() === 'Locality'), null, T);
+    labels = await all();
+    assert.ok(labels.includes('Recorded by') && !labels.includes('Preparations'));
+    // A group whose every row is hidden is not drawn.
+    await page.evaluate(() => document.querySelector('gbif-occurrence-groups').setAttribute('hide-terms', 'identifiedBy typeStatus dateIdentified'));
+    await page.waitForFunction(() => !document.querySelector('gbif-occurrence-groups').shadowRoot.querySelector('section[data-group="identification"]'), null, T);
+    assert.ok(await page.locator('gbif-occurrence-groups section[data-group="location"]').count());
+  });
+
+  await test('record: a record that was removed (HTTP 410) is "not found", like a 404', async (make) => {
+    const S = freshState();
+    S.recordHook = async () => ({ status: 410 });
+    const page = await make(S);
+    await page.mount(RECORD(7001));
+    await page.locator('gbif-occurrence-record [role=alert]', { hasText: 'was not found' }).waitFor(T);
+    assert.equal((await page.events('gbif-record-notfound')).length, 1);
+    assert.equal((await page.events('gbif-error')).length, 0);
+  });
+
+  await test('api: an answer that is not JSON is an error and is not tried again', async (make) => {
+    const S = freshState();
+    S.searchHook = async () => ({ status: 200, body: '<html>maintenance</html>' });
+    const page = await make(S);
+    await page.mount(ALL_VIEWS());
+    await page.locator('gbif-occurrence-table [role=alert]', { hasText: 'Could not load' }).waitFor(T);
+    await sleep(2800);
+    assert.equal(tableReqs(page).length, 1, 'asked once');
+  });
+
+  await test('search: two searches keeping filters in the address under one prefix are warned about', async (make) => {
+    const page = await make();
+    await page.mount('<gbif-occurrence-search id="a" sync-url></gbif-occurrence-search><gbif-occurrence-search id="b" sync-url></gbif-occurrence-search>');
+    await sleep(300);
+    assert.ok(page.warnings.some((m) => /same url-prefix/.test(m)), page.warnings.join(' | '));
+    page.warnings.length = 0;
+    await page.mount('<gbif-occurrence-search id="a" sync-url url-prefix="a_"></gbif-occurrence-search><gbif-occurrence-search id="b" sync-url url-prefix="b_"></gbif-occurrence-search>');
+    await sleep(300);
+    assert.ok(!page.warnings.some((m) => /same url-prefix/.test(m)));
+  });
+
+  await test('gallery: the alt text says what the picture shows, not who made it, and the link says it opens the occurrence', async (make) => {
+    const page = await make();
+    await page.mount(ALL_VIEWS());
+    await page.locator('gbif-occurrence-gallery img').first().waitFor(T);
+    assert.equal(await page.locator('gbif-occurrence-gallery img').first().getAttribute('alt'), 'Puma concolor 0 (Norway)');
+    assert.match(await page.locator('gbif-occurrence-gallery a').first().getAttribute('aria-label'), /^View this occurrence: Puma concolor 0 \(Norway\)$/);
+  });
+
+  await test('csp: no component sets an inline style attribute from its markup (a policy without style-src-attr is not reported)', async (make) => {
+    const page = await make();
+    await page.route(PAGE_URL, async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, headers: { ...response.headers(), 'content-security-policy-report-only': "style-src-attr 'none'" } });
+    });
+    await page.goto(PAGE_URL);
+    await page.evaluate(() => {
+      window.__violations = [];
+      document.addEventListener('securitypolicyviolation', (e) => window.__violations.push(`${e.violatedDirective} on <${e.target?.localName ?? e.target}> ${e.sample ?? ''}`));
+    });
+    await page.mount(ALL_VIEWS() + '<gbif-taxon-card taxon-key="4QHKG" reserve-space></gbif-taxon-card><gbif-media-gallery taxon-key="4QHKG" reserve-space></gbif-media-gallery>');
+    await page.locator('gbif-occurrence-gallery img').first().waitFor(T);
+    await page.locator('gbif-media-gallery img').first().waitFor(T);
+    await sleep(300);
+    assert.deepEqual(await page.evaluate(() => window.__violations), []);
+  });
+
+  await test('linking: an element removed while it was still looking for its search asks for nothing and keeps no listener', async (make) => {
+    const page = await make();
+    await page.mount('<gbif-occurrence-search id="s" taxon-key="4QHKG"></gbif-occurrence-search>');
+    await sleep(200);
+    await page.evaluate(() => {
+      const table = document.createElement('gbif-occurrence-table');
+      table.setAttribute('search', '#s');
+      document.body.append(table);
+      table.remove(); // before it has bound
+    });
+    await sleep(400);
+    assert.equal(tableReqs(page).length, 0, 'a detached element made a request');
+    // One that was bound and then removed stops following: a change of the search asks nothing for it.
+    await page.evaluate(() => {
+      window.__table = document.createElement('gbif-occurrence-table');
+      window.__table.setAttribute('search', '#s');
+      document.body.append(window.__table);
+    });
+    await page.waitForFunction(() => window.__table._rows?.length > 0, null, T);
+    const before = tableReqs(page).length;
+    await page.evaluate(() => window.__table.remove());
+    await page.evaluate(() => document.querySelector('#s').setFilters({ country: ['NO'] }));
+    await sleep(400);
+    assert.equal(tableReqs(page).length, before, 'a removed table kept following the search');
+  });
+
+  await test('panel: facet-limit is clamped, and typing is not applied after the panel is removed', async (make) => {
+    const page = await make();
+    await page.mount(ALL_VIEWS().replace('<gbif-occurrence-filters search="#s">', '<gbif-occurrence-filters search="#s" facet-limit="500">'));
+    await waitTotal(page, 60);
+    assert.ok(facetReqs(page).every((p) => Number(p.get('facetLimit')) <= 100), facetReqs(page).map((p) => p.get('facetLimit')).join());
+    await page.evaluate(() => document.querySelector('gbif-occurrence-filters').setAttribute('facet-limit', '0'));
+    await page.waitForFunction(() => true);
+    await sleep(500);
+    assert.ok(facetReqs(page).every((p) => Number(p.get('facetLimit')) >= 1));
+    // Typed, then the panel goes before the delay is over: nothing is applied.
+    await page.locator('gbif-occurrence-filters input[type=search]').fill('puma');
+    await page.evaluate(() => document.querySelector('gbif-occurrence-filters').remove());
+    await sleep(800);
+    assert.deepEqual(await page.evaluate(() => document.querySelector('#s').userQuery), {});
+  });
+
+  await test('record: a change of api-base asks the new address, and what is on screen is not the old record', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7002));
+    await page.locator('gbif-occurrence-groups section').first().waitFor(T);
+    page.requests.length = 0;
+    await page.evaluate(() => document.querySelector('#r').setAttribute('api-base', '/gbif-proxy'));
+    await page.waitForFunction(() => true);
+    await sleep(500);
+    assert.ok(page.requests.some((r) => r.full.includes('/gbif-proxy/v1/occurrence/7002')), page.requests.map((r) => r.full).join());
+  });
+
+  await test('images: a failed image does not stay failed on the next record, and a fallback does not outlive its record', async (make) => {
+    const S = freshState();
+    S.thumbnails = 'broken';
+    const page = await make(S);
+    await page.mount(RECORD(7001));
+    await page.locator('gbif-occurrence-images', { hasText: '' }).waitFor(T);
+    // Cache misses (404), then the publisher's file too: broken for this record.
+    S.thumbnails = 'missing';
+    await page.mount(RECORD(7001));
+    await page.waitForFunction(() => document.querySelector('gbif-occurrence-images')?.shadowRoot.querySelectorAll('img').length > 0, null, T);
+    const first = await page.evaluate(() => document.querySelector('gbif-occurrence-images')._fallback.size);
+    assert.ok(first >= 1, 'the cache had nothing, so the publisher\'s file is used');
+    await page.evaluate(() => (document.querySelector('#r').occurrenceKey = '8006'));
+    await page.waitForFunction(() => document.querySelector('gbif-occurrence-images').shadowRoot.querySelectorAll('figure').length === 5, null, T);
+    assert.equal(await page.evaluate(() => document.querySelector('gbif-occurrence-images')._broken.size), 0);
+    assert.ok(await page.evaluate(() => document.querySelector('gbif-occurrence-images')._fallback.size) <= 5);
+    S.thumbnails = 'ok';
+    await page.mount(RECORD(8006));
+    await page.waitForFunction(() => document.querySelector('gbif-occurrence-images')?.shadowRoot.querySelectorAll('img').length === 5, null, T);
+    assert.ok((await page.locator('gbif-occurrence-images img').first().getAttribute('src')).includes('/v1/image/cache/'), 'a new record starts from the cache again');
+  });
+
+  await test('location: its map observer is released when it is removed, and a record change moves the point', async (make) => {
+    const page = await make();
+    await page.mount(RECORD(7001));
+    await mapReady(page, 'gbif-occurrence-location');
+    const lat = () => page.evaluate(() => document.querySelector('gbif-occurrence-location')._map.getCenter().lat);
+    assert.ok(Math.abs((await lat()) - -51.1) < 1);
+    await page.evaluate(() => (document.querySelector('#r').occurrenceKey = '8002'));
+    await page.waitForFunction(() => Math.abs(document.querySelector('gbif-occurrence-location')?._map?.getCenter().lat - 89.95) < 5, null, T);
+    await page.evaluate(() => {
+      window.__loc = document.querySelector('gbif-occurrence-location');
+      window.__loc.remove();
+    });
+    assert.equal(await page.evaluate(() => window.__loc._resizeObserver), null, 'the observer was released');
+    assert.equal(await page.evaluate(() => window.__loc._map), null);
   });
 
 }

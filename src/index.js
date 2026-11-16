@@ -12,6 +12,7 @@ import { GbifOccurrenceGroups } from './components/gbif-occurrence-groups.js';
 import { GbifOccurrenceImages } from './components/gbif-occurrence-images.js';
 import { GbifOccurrenceLocation } from './components/gbif-occurrence-location.js';
 import { GbifOccurrenceExtensions } from './components/gbif-occurrence-extensions.js';
+import { GbifOccurrenceCitation } from './components/gbif-occurrence-citation.js';
 import { configure } from './shared/config.js';
 
 export { configure };
@@ -29,7 +30,8 @@ export {
   GbifOccurrenceGroups,
   GbifOccurrenceImages,
   GbifOccurrenceLocation,
-  GbifOccurrenceExtensions
+  GbifOccurrenceExtensions,
+  GbifOccurrenceCitation
 };
 
 /** Version of this build, replaced at build time. */
@@ -49,8 +51,15 @@ const ELEMENTS = {
   'gbif-occurrence-groups': GbifOccurrenceGroups,
   'gbif-occurrence-images': GbifOccurrenceImages,
   'gbif-occurrence-location': GbifOccurrenceLocation,
-  'gbif-occurrence-extensions': GbifOccurrenceExtensions
+  'gbif-occurrence-extensions': GbifOccurrenceExtensions,
+  'gbif-occurrence-citation': GbifOccurrenceCitation
 };
+
+// Settings the page defined before this script ran (`window.GbifComponentsConfig = { apiBase: '/gbif-proxy' }`),
+// applied before any element exists, so that not even the first request goes to the wrong place.
+if (globalThis.GbifComponentsConfig && typeof globalThis.GbifComponentsConfig === 'object') {
+  configure(globalThis.GbifComponentsConfig);
+}
 
 // Register every component. A tag the page has already defined is left alone, and
 // the page is told, because the components for that tag will not be the ones it expects.

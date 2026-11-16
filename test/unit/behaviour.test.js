@@ -317,6 +317,51 @@ test('responses are kept in session storage for as long as the server says they 
   }
 });
 
+test('what is kept in session storage stays within a budget, oldest first, and never touches the page\'s own entries', async () => {
+  clearCache();
+  const realFetch = globalThis.fetch;
+  const realStorage = globalThis.sessionStorage;
+  const realNow = Date.now;
+  const storage = new FakeStorage();
+  globalThis.sessionStorage = storage;
+  storage['host-form-draft'] = 'x'.repeat(300_000);
+  let n = 0;
+  globalThis.fetch = async () => ({
+    ok: true,
+    headers: { get: (name) => (name === 'cache-control' ? 'public, max-age=600' : null) },
+    json: async () => ({ n: ++n, filler: 'y'.repeat(30_000) })
+  });
+  const ours = () => Object.keys(storage).filter((k) => k.startsWith('gbif-components:'));
+  const size = () => ours().reduce((sum, k) => sum + k.length + storage[k].length, 0);
+  try {
+    let clock = realNow();
+    Date.now = () => (clock += 1000);
+    for (let i = 0; i < 80; i += 1) await getJson(`https://x.test/page/${i}`);
+    assert.ok(size() <= 1_000_000, `kept ${size()} characters`);
+    assert.ok(ours().length >= 20, 'it still keeps a useful number of entries');
+    assert.equal(storage['host-form-draft'].length, 300_000, 'the page\'s own data is untouched');
+    assert.ok(!ours().some((k) => k.endsWith('/page/0')), 'the oldest entry went first');
+    assert.ok(ours().some((k) => k.endsWith('/page/79')), 'the newest entry is kept');
+
+    // An answer too large to be worth keeping is not kept at all.
+    globalThis.fetch = async () => ({ ok: true, headers: { get: () => 'public, max-age=600' }, json: async () => ({ big: 'z'.repeat(150_000) }) });
+    await getJson('https://x.test/big');
+    assert.ok(!ours().some((k) => k.endsWith('/big')));
+
+    // If the page has filled the quota, ours is given back and the request still succeeds.
+    storage.setItem = () => { throw new DOMException('full', 'QuotaExceededError'); };
+    globalThis.fetch = async () => ({ ok: true, headers: { get: () => 'public, max-age=600' }, json: async () => ({ fine: 1 }) });
+    assert.deepEqual(await getJson('https://x.test/full'), { fine: 1 });
+    assert.deepEqual(ours(), [], 'all of ours was given back');
+    assert.equal(storage['host-form-draft'].length, 300_000);
+  } finally {
+    Date.now = realNow;
+    globalThis.fetch = realFetch;
+    globalThis.sessionStorage = realStorage;
+    clearCache();
+  }
+});
+
 test('nothing is stored for responses without a max-age, and storage failures are harmless', async () => {
   clearCache();
   const realFetch = globalThis.fetch;

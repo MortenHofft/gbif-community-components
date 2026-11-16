@@ -181,6 +181,8 @@ export function firstImage(row) {
   return {
     // The exact string from the API: GBIF names the image after a hash of it.
     identifier: item.identifier,
+    // The address to load and link to: checked, trimmed and written out in full.
+    url: safeHttpUrl(item.identifier),
     occurrenceKey: String(row.key),
     rightsHolder: text(item.rightsHolder) ?? text(item.creator),
     license,

@@ -1,3 +1,4 @@
+import { html } from 'lit';
 import { GbifLinkedElement } from './linked-element.js';
 import { resolveConfig } from './config.js';
 
@@ -40,6 +41,15 @@ export class GbifRecordConsumer extends GbifLinkedElement {
   get config() {
     const own = resolveConfig({ hideSource: this.hideSource });
     return { ...(this.recordEl?.config ?? own), showSource: own.showSource };
+  }
+
+  /**
+   * What to draw when no record element was found: a message, as the search components give. `null` otherwise. (A record
+   * that is not found, not valid or failed is reported once, by the record element.)
+   */
+  renderRecordProblem() {
+    if (this._linkStatus !== 'missing') return null;
+    return html`<p class="gbif-card__state" role="alert">No occurrence record was found for this component.</p>`;
   }
 
   onLinked() {

@@ -1,7 +1,16 @@
 import { html, css, nothing } from 'lit';
 import { GbifRecordConsumer } from '../shared/record-consumer.js';
 
-const names = (list) => (typeof list === 'string' ? list.split(/[,|]+/).map((n) => n.trim().toLowerCase()).filter(Boolean) : []);
+/**
+ * A list of names from an attribute. Names are separated by commas (or `|`), and may contain spaces ("Measurement or
+ * fact"). A list with no commas may also be separated by spaces ("Multimedia Identification"), as the other list
+ * attributes are, so each word of an entry counts as a name too.
+ */
+const names = (list) => {
+  if (typeof list !== 'string') return [];
+  const entries = list.split(/[,|]+/).map((n) => n.trim().toLowerCase()).filter(Boolean);
+  return [...new Set(entries.flatMap((entry) => [entry, ...entry.split(/\s+/)]))];
+};
 
 /**
  * <gbif-occurrence-extensions record="#r"></gbif-occurrence-extensions>
@@ -12,14 +21,14 @@ const names = (list) => (typeof list === 'string' ? list.split(/[,|]+/).map((n) 
  * as published. A record without extensions shows nothing.
  *
  * Attributes: `record` (the record element), plus
- *   exclude   extensions to leave out, a comma-separated list of their names such as
- *             "Multimedia, Identification". Default: "Multimedia", because the images are
+ *   exclude   extensions to leave out, a list of their names such as "Multimedia, Identification"
+ *             (separated by commas; spaces work too when the names are one word). Default: "Multimedia", because the images are
  *             shown by <gbif-occurrence-images>. Use `exclude=""` to show it too.
  *   only      show only these
  * A name is matched against the extension's name (`MeasurementOrFact`) or its label
  * (`Measurement or fact`), in any case. A long extension is cut at 100 rows, and says how many are left out.
  *
- * Also `heading-level` and `hide-source`.
+ * Also `heading` (only when a single extension is shown), `heading-level` and `hide-source`.
  */
 export class GbifOccurrenceExtensions extends GbifRecordConsumer {
   static properties = {
@@ -49,6 +58,7 @@ export class GbifOccurrenceExtensions extends GbifRecordConsumer {
         text-align: left;
         vertical-align: top;
         overflow-wrap: anywhere;
+        unicode-bidi: plaintext;
       }
       .gbif-extensions__table th {
         color: var(--gbif-color-muted, #596273);
@@ -89,6 +99,8 @@ export class GbifOccurrenceExtensions extends GbifRecordConsumer {
   }
 
   render() {
+    const problem = this.renderRecordProblem();
+    if (problem) return problem;
     if (!this.ready) return nothing;
     const extensions = this._chosen(this.view.extensions);
     if (!extensions.length) return nothing;
@@ -99,7 +111,7 @@ export class GbifOccurrenceExtensions extends GbifRecordConsumer {
           (ext) => html`<section class="gbif-card" part="card" data-extension=${ext.name}>
             <header class="gbif-card__header" part="header">
               <span class="gbif-card__badge">GBIF</span>
-              ${this.renderTitle(`${ext.label} (${ext.rows.length + ext.omitted})`)}
+              ${this.renderTitle(extensions.length === 1 && this.heading ? this.heading : `${ext.label} (${ext.rows.length + ext.omitted})`)}
             </header>
             <div class="gbif-extensions__scroll" role="region" aria-label=${ext.label} tabindex="0">
               <table class="gbif-extensions__table" part="table">

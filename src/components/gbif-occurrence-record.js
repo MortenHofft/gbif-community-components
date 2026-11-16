@@ -1,5 +1,5 @@
 import { LitElement, css, html, nothing } from 'lit';
-import { resolveConfig } from '../shared/config.js';
+import { onConfigChange, resolveConfig } from '../shared/config.js';
 import { emit } from '../shared/events.js';
 import { buildExtensions, buildGroups, buildMedia, buildPoint, cleanOccurrenceKey } from '../shared/dwc.js';
 import { fetchRecord } from '../shared/record.js';
@@ -91,6 +91,16 @@ export class GbifOccurrenceRecord extends LitElement {
 
   willUpdate(changed) {
     if (changed.has('occurrenceKey') || changed.has('apiBase')) this._load();
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this._stopWatchingConfig = onConfigChange(() => this.hasUpdated && this._load());
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this._stopWatchingConfig?.();
   }
 
   _set(status) {

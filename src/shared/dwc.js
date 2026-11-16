@@ -30,7 +30,7 @@ export const DWC_GROUPS = [
     key: 'occurrence',
     label: 'Occurrence',
     about: 'An organism at a place and time, as recorded.',
-    terms: ['occurrenceID', 'catalogNumber', 'recordNumber', 'recordedBy', 'recordedByID', 'individualCount', 'organismQuantity', 'organismQuantityType', 'sex', 'lifeStage', 'reproductiveCondition', 'caste', 'behavior', 'vitality', 'establishmentMeans', 'degreeOfEstablishment', 'pathway', 'occurrenceStatus', 'otherCatalogNumbers', 'associatedMedia', 'associatedOccurrences', 'associatedReferences', 'associatedSequences', 'associatedTaxa', 'occurrenceRemarks']
+    terms: ['occurrenceID', 'catalogNumber', 'recordNumber', 'recordedBy', 'recordedByID', 'individualCount', 'organismQuantity', 'organismQuantityType', 'sex', 'lifeStage', 'reproductiveCondition', 'caste', 'behavior', 'vitality', 'establishmentMeans', 'degreeOfEstablishment', 'pathway', 'occurrenceStatus', 'otherCatalogNumbers', 'associatedMedia', 'associatedOccurrences', 'associatedReferences', 'associatedTaxa', 'occurrenceRemarks']
   },
   {
     key: 'organism',
@@ -42,7 +42,7 @@ export const DWC_GROUPS = [
     key: 'material-entity',
     label: 'Material entity',
     about: 'The specimen or sample that was kept.',
-    terms: ['materialEntityID', 'materialSampleID', 'preparations', 'disposition', 'verbatimLabel', 'materialEntityRemarks']
+    terms: ['materialEntityID', 'materialSampleID', 'preparations', 'disposition', 'verbatimLabel', 'associatedSequences', 'materialEntityRemarks']
   },
   {
     key: 'event',
@@ -77,13 +77,13 @@ export const DWC_GROUPS = [
   {
     key: 'gbif',
     label: 'GBIF processing',
-    about: 'GBIF\'s own identifiers, dates and quality flags. Not Darwin Core.',
-    terms: ['gbifID', 'datasetKey', 'publishingOrgKey', 'installationKey', 'hostingOrganizationKey', 'publishingCountry', 'publishedByGbifRegion', 'gbifRegion', 'protocol', 'crawlId', 'lastCrawled', 'lastParsed', 'lastInterpreted', 'issues', 'taxonKey', 'acceptedTaxonKey', 'kingdomKey', 'phylumKey', 'classKey', 'orderKey', 'familyKey', 'genusKey', 'speciesKey', 'isSequenced', 'isInCluster', 'dnaSequenceID', 'projectId']
+    about: 'GBIF\'s own identifiers, dates, quality flags and derived values (elevation, depth, administrative areas). Not Darwin Core.',
+    terms: ['gbifID', 'datasetKey', 'publishingOrgKey', 'installationKey', 'hostingOrganizationKey', 'publishingCountry', 'publishedByGbifRegion', 'gbifRegion', 'protocol', 'crawlId', 'lastCrawled', 'lastParsed', 'lastInterpreted', 'issues', 'taxonKey', 'acceptedTaxonKey', 'kingdomKey', 'phylumKey', 'classKey', 'orderKey', 'familyKey', 'genusKey', 'speciesKey', 'isSequenced', 'isInCluster', 'dnaSequenceID', 'projectId', 'networkKeys', 'repatriated', 'elevation', 'elevationAccuracy', 'depth', 'depthAccuracy', 'distanceFromCentroidInMeters', 'gadm.level0', 'gadm.level1', 'gadm.level2', 'gadm.level3']
   },
   {
     key: 'other',
     label: 'Other terms',
-    about: 'Terms the publisher used that are not part of Darwin Core, as published.',
+    about: 'Terms that are not part of Darwin Core or GBIF\'s own. Where the publisher used them, they are shown as published.',
     terms: []
   }
 ];
@@ -98,7 +98,7 @@ const KNOWN_NAMESPACES = ['http://rs.tdwg.org/dwc/terms/', 'http://purl.org/dc/t
 const UNKNOWN_NAMESPACE = 'http://unknown.org/';
 
 /** Keys of the interpreted record that are not single values, or are shown elsewhere. */
-const STRUCTURAL_KEYS = new Set(['extensions', 'media', 'facts', 'relations', 'identifiers', 'classifications', 'gadm', 'key']);
+const STRUCTURAL_KEYS = new Set(['extensions', 'media', 'facts', 'relations', 'identifiers', 'classifications', 'key']);
 
 /** The last part of a term URI: `http://rs.tdwg.org/dwc/terms/locality` -> `locality`. */
 export function localName(uri) {
@@ -146,6 +146,12 @@ export function cleanOccurrenceKey(value) {
   return typeof text === 'string' && /^\d{1,19}$/.test(text.trim()) ? text.trim() : undefined;
 }
 
+/** Terms that hold several values in one text, separated by `|` (Darwin Core's recommended way to write a list). */
+const LIST_TERMS = new Set(['recordedBy', 'recordedByID', 'identifiedBy', 'identifiedByID', 'georeferencedBy', 'georeferenceSources', 'otherCatalogNumbers', 'associatedMedia', 'associatedOccurrences', 'associatedReferences', 'associatedSequences', 'associatedTaxa', 'associatedOrganisms', 'previousIdentifications', 'preparations', 'typeStatus', 'lithostratigraphicTerms', 'establishmentMeans', 'identificationQualifier', 'issues', 'networkKeys', 'projectId']);
+
+/** GBIF's own fields that are lengths in metres without saying so in their name. */
+const METRE_TERMS = new Set(['elevation', 'elevationAccuracy', 'depth', 'depthAccuracy']);
+
 const isScalar = (v) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
 
 /** GBIF's enumerations, which it writes in capitals: `HUMAN_OBSERVATION`. Shown as a sentence, or as a name. */
@@ -164,7 +170,7 @@ function asText(name, value, interpreted = false) {
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) return null;
     if (name === 'decimalLatitude' || name === 'decimalLongitude') return String(Number(value.toFixed(6)));
-    return /InMeters$/.test(name) ? `${value} m` : String(value);
+    return /InMeters$/.test(name) || METRE_TERMS.has(name) ? `${value} m` : String(value);
   }
   if (typeof value === 'string') {
     const text = value.trim();
@@ -181,7 +187,7 @@ function asText(name, value, interpreted = false) {
 /** A value ready to show: its text, a link if it is a web address or a licence, or `parts` if it is several values. */
 function shown(name, value, interpreted = false) {
   // Several values: a list, or one text with `|` between them (the way GBIF and publishers write them).
-  const items = Array.isArray(value) && value.length && value.every(isScalar) ? value : typeof value === 'string' && value.includes('|') ? value.split('|') : null;
+  const items = Array.isArray(value) && value.length && value.every(isScalar) ? value : typeof value === 'string' && value.includes('|') && LIST_TERMS.has(name) ? value.split('|') : null;
   if (items) {
     const parts = items.map((v) => asText(name, typeof v === 'string' ? v.trim() : v, interpreted)).filter(Boolean);
     if (!parts.length) return null;
@@ -200,6 +206,19 @@ function shown(name, value, interpreted = false) {
   return href ? { text, href } : { text };
 }
 
+/** A web address with its scheme and the case of its host ignored, which are not part of what it points to. */
+function addressKey(href) {
+  try {
+    const url = new URL(href);
+    return `${url.host.toLowerCase()}${url.pathname.replace(/\/(legalcode|deed\.[a-z]+)$/i, '').replace(/\/$/, '')}${url.search}`;
+  } catch {
+    return href;
+  }
+}
+
+/** A plain decimal number (not `0x10`, `1e3` or ` `, which `Number()` would take). */
+const DECIMAL = /^[+-]?\d+(\.\d+)?$/;
+
 /** The same value, shown two ways: a number written differently, or a licence given as a label and as an address. */
 function sameValue(a, b) {
   if (a.text.toLowerCase() === b.text.toLowerCase()) return true;
@@ -209,10 +228,22 @@ function sameValue(a, b) {
   const isInstant = (v) => /^\d{4}-\d{2}-\d{2}T/.test(v.text);
   const hasZone = (v) => /(Z|[+-]\d{2}:?\d{2})$/i.test(v.text);
   if (isInstant(a) && isInstant(b) && hasZone(a) === hasZone(b) && Date.parse(a.text) === Date.parse(b.text)) return true;
-  const [x, y] = [Number(a.text.replace(/ m$/, '')), Number(b.text.replace(/ m$/, ''))];
-  if (a.text !== '' && b.text !== '' && Number.isFinite(x) && Number.isFinite(y) && x === y) return true;
-  const address = (v) => v.href?.replace(/^https?:/, '').replace(/\/(legalcode|deed\.[a-z]+)$/i, '').replace(/\/$/, '').toLowerCase();
-  return !!a.href && !!b.href && address(a) === address(b);
+  const plain = (v) => v.text.replace(/ m$/, '');
+  if (DECIMAL.test(plain(a)) && DECIMAL.test(plain(b)) && Number(plain(a)) === Number(plain(b))) return true;
+  return !!a.href && !!b.href && addressKey(a.href) === addressKey(b.href);
+}
+
+/** `dcterms`, `dc`, `dwc`, `gbif` or the host, for telling apart two terms that share a name. */
+function namespaceLabel(uri) {
+  if (uri.startsWith('http://purl.org/dc/terms/')) return 'dcterms';
+  if (uri.startsWith('http://purl.org/dc/elements/1.1/')) return 'dc';
+  if (uri.startsWith('http://rs.tdwg.org/dwc/terms/')) return 'dwc';
+  if (uri.startsWith('http://rs.gbif.org/terms/')) return 'gbif';
+  try {
+    return new URL(uri).host;
+  } catch {
+    return 'other';
+  }
 }
 
 /** Plain-name key of a term URI if it is Darwin Core or Dublin Core, else `null`. */
@@ -256,30 +287,56 @@ export function buildGroups({ interpreted, verbatim } = {}) {
     }
   }
 
-  const verbatimByLocalName = new Map();
+  // GBIF's administrative areas (GADM), one row for each level it gives.
+  if (interpreted?.gadm && typeof interpreted.gadm === 'object') {
+    for (let level = 0; level <= 3; level += 1) {
+      const area = interpreted.gadm[`level${level}`];
+      const name = typeof area?.name === 'string' ? area.name.trim() : '';
+      if (!name) continue;
+      const row = entry(`gadm.level${level}`);
+      row.label = `Administrative area, level ${level} (GADM)`;
+      row.value = { text: typeof area.gid === 'string' && area.gid.trim() ? `${name} (${area.gid.trim()})` : name };
+    }
+  }
+
+  const verbatimByLocalName = new Map(); // local name -> the rows of terms outside the known namespaces
+  const publishedFrom = new Map(); // row -> the address of the term its published value came from
   if (verbatim && typeof verbatim === 'object') {
     for (const [uri, value] of Object.entries(verbatim)) {
       if (!uri.startsWith('http')) continue; // GBIF's own bookkeeping, not a term
-      const name = knownName(uri) ?? uri;
       const shownValue = shown(localName(uri), value);
       if (!shownValue) continue;
-      const row = entry(name, uri);
+      let name = knownName(uri) ?? uri;
+      let row = entry(name, uri);
+      // Two terms with one plain name (`dc:type` and `dcterms:type`) are two rows, not one with the second's value.
+      if (publishedFrom.has(row) && publishedFrom.get(row) !== uri) {
+        name = uri;
+        row = entry(uri, uri);
+        row.label = `${humanize(localName(uri))} (${namespaceLabel(uri)})`;
+      }
       if (!row.uri) row.uri = uri;
       row.published = shownValue;
-      if (!knownName(uri)) verbatimByLocalName.set(localName(uri).toLowerCase(), row);
+      publishedFrom.set(row, uri);
+      if (!knownName(uri)) {
+        const list = verbatimByLocalName.get(localName(uri).toLowerCase()) ?? [];
+        list.push(row);
+        verbatimByLocalName.set(localName(uri).toLowerCase(), list);
+      }
     }
   }
 
   // A term GBIF did not recognise is in the verbatim record under its real address as well: that is the same
-  // term, so it is one row. Only a term with no verbatim twin stands on its own.
+  // term, so it is one row. Only a term with no verbatim twin stands on its own, and where two terms in different
+  // namespaces share a name there is no telling which is the twin, so it stands on its own too.
   for (const [key, shownValue] of unknownInterpreted) {
-    const twin = verbatimByLocalName.get(localName(key).toLowerCase());
-    (twin ?? entry(key, key)).value = shownValue;
+    const twins = verbatimByLocalName.get(localName(key).toLowerCase()) ?? [];
+    (twins.length === 1 ? twins[0] : entry(key, key)).value = shownValue;
   }
 
   const byGroup = new Map(DWC_GROUPS.map((group) => [group.key, []]));
   for (const row of terms.values()) {
-    const placed = TERM_GROUP.get(row.name);
+    // A term in a known namespace is placed by its plain name even when its row is keyed by its address.
+    const placed = TERM_GROUP.get(row.name) ?? (row.name.startsWith('http') ? TERM_GROUP.get(knownName(row.name) ?? '') : undefined);
     const groupKey = placed ? placed.group : 'other';
     // Nothing interpreted: the value is what was published.
     const value = row.value ?? row.published;
@@ -351,12 +408,14 @@ export function buildMedia(interpreted) {
   const other = [];
   for (const item of Array.isArray(interpreted?.media) ? interpreted.media : []) {
     if (!item || typeof item !== 'object') continue;
-    const identifier = safeHttpUrl(item.identifier) ? item.identifier : null;
-    if (!identifier) continue;
+    const url = safeHttpUrl(item.identifier);
+    if (!url) continue;
     const license = formatLicense(item.license);
     const media = {
       // The exact string from the API: GBIF names a cached image after a hash of it.
-      identifier,
+      identifier: item.identifier,
+      // The address to link to and to load: the same, checked, trimmed and written out in full.
+      url,
       type: text(item.type),
       format: text(item.format),
       title: text(item.title),
@@ -376,11 +435,73 @@ export function buildMedia(interpreted) {
 /** A number from a number or a numeric string. Not from an empty string, `null` or anything else: `Number('')` is 0. */
 const toNumber = (v) => (typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
 
-/** Where the record says it was, if it says so in a way a map can use. */
+/** What GBIF's location flags mean, for the ones that say the coordinates cannot be taken at face value. */
+const LOCATION_ISSUES = {
+  ZERO_COORDINATE: 'the coordinates are 0°, 0°',
+  COORDINATE_OUT_OF_RANGE: 'the coordinates are outside the valid range',
+  COORDINATE_INVALID: 'the coordinates could not be read',
+  COUNTRY_COORDINATE_MISMATCH: 'the coordinates are outside the stated country',
+  PRESUMED_NEGATED_LATITUDE: 'the sign of the latitude looks reversed',
+  PRESUMED_NEGATED_LONGITUDE: 'the sign of the longitude looks reversed',
+  PRESUMED_SWAPPED_COORDINATE: 'latitude and longitude look swapped',
+  COORDINATE_REPROJECTION_FAILED: 'the coordinates could not be converted to WGS84',
+  COORDINATE_REPROJECTION_SUSPICIOUS: 'the conversion of the coordinates to WGS84 looks wrong',
+  COORDINATE_UNCERTAINTY_METERS_INVALID: 'the coordinate uncertainty is not valid',
+  COORDINATE_PRECISION_INVALID: 'the coordinate precision is not valid'
+};
+
+/** Degrees of latitude are about this many kilometres. */
+const KM_PER_DEGREE = 111;
+
+/**
+ * What a reader should be told about how far to trust the location of a record. Each note is
+ * `{ kind, text }`, where `kind` is `generalized` (the location was made less exact on purpose, by the publisher
+ * or by GBIF, usually to protect a sensitive species), `withheld` (the publisher held something back),
+ * `flagged` (GBIF found a problem with the coordinates) or `coarse` (the coordinates are exact only to a wide area).
+ * These are there even when there is no point to draw.
+ */
+export function buildLocationNotes(interpreted) {
+  const notes = [];
+  const r = interpreted && typeof interpreted === 'object' ? interpreted : {};
+  const limited = (v) => (text(v) && text(v).length > 400 ? `${text(v).slice(0, 400)}…` : text(v));
+
+  if (limited(r.dataGeneralizations)) notes.push({ kind: 'generalized', text: `The location was made less exact on purpose: ${limited(r.dataGeneralizations)}` });
+  if (limited(r.informationWithheld)) notes.push({ kind: 'withheld', text: `Information was withheld: ${limited(r.informationWithheld)}` });
+
+  const issues = (Array.isArray(r.issues) ? r.issues : []).filter((flag) => typeof flag === 'string');
+  const problems = issues.filter((flag) => Object.hasOwn(LOCATION_ISSUES, flag)).map((flag) => LOCATION_ISSUES[flag]);
+  const lat = toNumber(r.decimalLatitude);
+  const lng = toNumber(r.decimalLongitude);
+  if (lat === 0 && lng === 0 && !issues.includes('ZERO_COORDINATE')) problems.unshift(LOCATION_ISSUES.ZERO_COORDINATE);
+  if (problems.length) notes.push({ kind: 'flagged', text: `Do not rely on this location: ${problems.join('; ')}.` });
+
+  const precision = toNumber(r.coordinatePrecision);
+  if (issues.includes('COORDINATE_ROUNDED') || (Number.isFinite(precision) && precision >= 0.01)) {
+    const about = Number.isFinite(precision) && precision >= 0.01 ? ` to ${precision}° (about ${Math.round(precision * KM_PER_DEGREE)} km)` : '';
+    notes.push({ kind: 'coarse', text: `The coordinates are rounded${about}, so the point is only roughly where it happened.` });
+  }
+  const uncertainty = toNumber(r.coordinateUncertaintyInMeters);
+  if (Number.isFinite(uncertainty) && uncertainty >= 100_000) {
+    notes.push({ kind: 'coarse', text: `The location is uncertain by ${Math.round(uncertainty / 1000).toLocaleString('en')} km.` });
+  }
+  return notes;
+}
+
+/**
+ * Where the record says it was, if it says so in a way a map can use, with the notes on how far to trust it.
+ * `approximate` is true when the point is not the exact place (generalised, rounded or very uncertain).
+ */
 export function buildPoint(interpreted) {
   const lat = toNumber(interpreted?.decimalLatitude);
   const lng = toNumber(interpreted?.decimalLongitude);
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
   const uncertainty = toNumber(interpreted.coordinateUncertaintyInMeters);
-  return { lat, lng, uncertainty: Number.isFinite(uncertainty) && uncertainty > 0 ? uncertainty : null };
+  const notes = buildLocationNotes(interpreted);
+  return {
+    lat,
+    lng,
+    uncertainty: Number.isFinite(uncertainty) && uncertainty > 0 ? uncertainty : null,
+    notes,
+    approximate: notes.some((note) => note.kind === 'generalized' || note.kind === 'coarse' || note.kind === 'flagged')
+  };
 }

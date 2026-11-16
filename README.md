@@ -4,7 +4,7 @@ A community-driven collection of **web components** that expose content from [GB
 
 The goal is to make it easy to show GBIF-mediated biodiversity data on custom sites: a museum page about a species, a national park's checklist, a university course site, a conservation NGO's news page, or a citizen-science project. Instead of each site re-implementing GBIF API calls, layout and attribution, a site author adds a single HTML element and gets a working, styled, accessible component.
 
-> **Status:** early prototype. Fourteen elements exist: for one taxon (taxon card, media gallery, occurrence map, type specimens), for searching occurrences (search, filter panel, table, image gallery), for one occurrence (record, Darwin Core groups, images, location map, extensions), and a page-footer attribution. They try out the approach. They are not published anywhere yet, and names, attributes and events may still change.
+> **Status:** early prototype. Fifteen elements exist: for one taxon (taxon card, media gallery, occurrence map, type specimens), for searching occurrences (search, filter panel, table, image gallery), for one occurrence (record, Darwin Core groups, images, location map, extensions, citation), and a page-footer attribution. They try out the approach. They are not published anywhere yet, and names, attributes and events may still change.
 
 ## Why web components?
 
@@ -58,7 +58,7 @@ A taxon key only means something **inside a checklist**: the same key can be a d
 Components share one data layer instead of each doing its own thing.
 
 - **A shared API client** (`src/shared/api.js`) is the only code that talks to the GBIF APIs. Components never call `fetch` directly. It builds URLs (the API base may carry a path prefix or be relative to the page, for a same-origin proxy), shares identical in-flight requests, sends at most four at a time, gives up on a request after 15 seconds, tries a throttled one again (up to twice), and never remembers a failure. Components also ignore a response that arrives after their taxon has changed.
-- **Caching follows what the API says.** GBIF sends `Cache-Control` with `max-age` (10 minutes for occurrence searches, 20 minutes for map capabilities, about an hour for taxon data, 2 days for basemap tiles), but the API also sends `Pragma: no-cache` and `Expires: 0`, and browsers then fetch again on every page view, ignoring the max-age. So the client keeps successful responses in `sessionStorage` for the `max-age` the API gave (at most an hour), and in memory for the life of the page (up to 200 entries). The storage is per tab, holds only public API responses, is cleaned of everything it wrote when it fills up, and is optional: if storage is blocked, requests go to the network. A strict privacy policy may still want to list it.
+- **Caching follows what the API says.** GBIF sends `Cache-Control` with `max-age` (10 minutes for occurrence searches, 20 minutes for map capabilities, about an hour for taxon data, 2 days for basemap tiles), but the API also sends `Pragma: no-cache` and `Expires: 0`, and browsers then fetch again on every page view, ignoring the max-age. So the client keeps successful responses in `sessionStorage` for the `max-age` the API gave (at most an hour), and in memory for the life of the page (up to 200 entries). The storage is per tab and holds only public API responses. It shares the page's own quota (about 5 MB for everything on the site's origin), so the client keeps to **1 MB** of its own, drops its oldest entries first, keeps no single answer over 100 KB, and gives back everything it wrote if the storage turns out to be full. It never touches entries it did not write. It is optional: if storage is blocked, requests go to the network. A strict privacy policy may still want to list it.
 - **URL state is opt-in, and belongs to the search element.** Components do not touch the page's URL, except `<gbif-occurrence-search sync-url>`, which keeps the visitor's filters in namespaced query parameters (see [Searching occurrences](#searching-occurrences)).
 - **Components on the same page** coordinate in two ways. Components about one taxon use events (see [Events](#events)): the page listens and sets attributes. Components that show one *search* (filter panel, table, gallery) share a query through `<gbif-occurrence-search>` and never talk to each other. No state-management library is planned.
 
@@ -87,7 +87,7 @@ Server-side rendering (SSR) is possible in principle, since Lit has experimental
 | `gbif-media-gallery` | Images with rights holder and licence. Renders nothing if there are none. | `limit` (1–300, default 20), `licenses` |
 | `gbif-occurrence-map` | Density map of georeferenced occurrences. Renders nothing if there are none. | `basemap`, `basemap-url`, `basemap-attribution` |
 | `gbif-type-specimens` | Paged list of type specimens (species and genus only). Renders nothing if there are none. | `page-size` (1–300, default 10) |
-| `gbif-attribution` | One source note for the whole page, for a footer. Anything inside the element is shown after it. | `checklist-key`, `api-base`, `site-base` |
+| `gbif-attribution` | One source note for the whole page, for a footer. Anything inside the element is shown after it. | `checklist-key`, `hide-taxonomy` (leave out the taxonomy line, for pages whose names are not a checklist's, such as an occurrence record's), `api-base`, `site-base` |
 
 The first four share these attributes:
 
@@ -144,22 +144,24 @@ Source notes are the only credit that can be hidden. Each image's rights holder 
 
 ### Configuration
 
-Set defaults once for the page instead of on every element. A plain HTML page can use the one global the bundle defines (the first copy of the bundle loaded wins):
+Set defaults once for the page instead of on every element. **Define them before the bundle loads**, so that not even the first request goes to the wrong place. This is what to use for a caching or privacy proxy (`apiBase`):
 
 ```html
 <script>
-  GbifComponents.configure({
+  window.GbifComponentsConfig = {
     apiBase: '/gbif-proxy',          // your caching proxy
     siteBase: 'https://www.gbif.org',
     checklistKey: '…',               // your checklist
     showSource: false,               // you use <gbif-attribution> instead
     timeoutMs: 15000
-  });
-  console.log(GbifComponents.version);
+  };
 </script>
+<script type="module" src="gbif-components.js"></script>
 ```
 
-Passing `null` for a key removes the override. An attribute on an element beats `configure()`, which beats the built-in default. In a module, import `configure` from the bundle instead.
+A classic `<script>` always runs before a module script, so this works wherever it stands in the page, as long as it is a classic script. The bundle also defines one global afterwards, `GbifComponents` (the first copy loaded wins), with `configure()` and `version`. A change made with `GbifComponents.configure({ apiBase: '…' })` after the page has loaded is followed: components that have already asked (taxon cards, searches, records, the attribution) **ask again** when the API address or the checklist changes, and a call that changes nothing asks for nothing. Elements that are linked (a table following a search) hold off by one tick before their first request, so `import { configure } from './gbif-components.js'; configure(…)` in a module also comes first. Do not call `GbifComponents.configure` from a classic script placed above the module tag: the global does not exist yet.
+
+Passing `null` for a key removes the override. An attribute on an element beats the page configuration, which beats the built-in default.
 
 ### Events
 
@@ -203,7 +205,8 @@ Add `follow-selection` to the card to let it load a taxon clicked in the classif
 | Filter panel, table, gallery | `v1/occurrence/search`, with `facet` (counts for the panel), and `mediaType=StillImage` (gallery) |
 | The same, for a search with a `predicate` | `POST v1/occurrence/search/predicate` |
 | One occurrence, interpreted and as published | `v1/occurrence/{key}`, `v1/occurrence/{key}/verbatim` |
-| Small versions of images | `v1/image/cache/fit-in/400x/occurrence/{occurrenceKey}/media/{md5 of the image URL}` |
+| Small versions of images | `v1/image/cache/fit-in/{400 or 600}x/occurrence/{occurrenceKey}/media/{md5 of the image URL}` (400 px in the occurrence gallery, 600 px on the record page) |
+| A dataset's citation and DOI (occurrence page) | `v1/dataset/{datasetKey}` (a large answer, of which four fields are kept) |
 | Images | `v1/occurrence/experimental/multimedia/species/{checklistKey}/{taxonKey}` |
 | Map | `v2/map/occurrence/density/…` |
 | Basemap | `tile.gbif.org` |
@@ -220,7 +223,7 @@ A visitor's browser contacts these hosts directly. Your own `api-base` replaces 
 | `tile.gbif.org` | The default map basemap (carries OpenStreetMap and OpenMapTiles data) |
 | **Whatever hosts the images** | Images in `<gbif-media-gallery>`. GBIF returns links to the publishers' own servers, so this is not a fixed list: many are on `inaturalist-open-data.s3.amazonaws.com`, others are anywhere. Images are requested with `referrerpolicy="no-referrer"`, so your page's address is not sent to them. `<gbif-occurrence-gallery>` avoids this: it asks GBIF's image cache (`api.gbif.org`) and only falls back to the publisher if that has no picture. |
 
-For a **Content Security Policy** the smallest working policy that was tested is `script-src` for the bundle's origin, `connect-src https://api.gbif.org`, and `img-src https: data:`, with no `style-src` needed. Because image hosts cannot be listed in advance, a strict `img-src` blocks the images in `<gbif-media-gallery>` ("Image failed to load", and a `gbif-error` event). The occurrence gallery needs only `api.gbif.org` while the image cache has the picture, and `https:` for its fallback. A stricter `img-src` works if you proxy images yourself, or leave the gallery out. With `require-trusted-types-for 'script'` the map does not render, because Leaflet assigns HTML; the other components work. Responses are kept in `sessionStorage` (see above). If the bundle is served from another origin than the page, that origin must send CORS headers for the bundle file and its chunks.
+For a **Content Security Policy** the smallest working policy that was tested is `script-src` for the bundle's origin, `connect-src https://api.gbif.org`, and `img-src https:` (`data:` is not needed), with no `style-src` needed (no inline styles are set from markup). Because image hosts cannot be listed in advance, a strict `img-src` blocks the images in `<gbif-media-gallery>` ("Image failed to load", and a `gbif-error` event). The occurrence gallery needs only `api.gbif.org` while the image cache has the picture, and `https:` for its fallback. A stricter `img-src` works if you proxy images yourself, or leave the gallery out. With `require-trusted-types-for 'script'` the map does not render, because Leaflet assigns HTML; the other components work. Responses are kept in `sessionStorage`, at most 1 MB of it (see above). If the bundle is served from another origin than the page, that origin must send CORS headers for the bundle file and its chunks.
 
 ## Searching occurrences
 
@@ -251,16 +254,18 @@ The names are GBIF's own occurrence search parameters, so one query is also an A
 
 | Filter | Value | Notes |
 | --- | --- | --- |
-| `country` | one or more ISO codes (`NO`, `SE`) | Shown with country names |
+| `country` | one or more country codes (`NO`, `SE`) | Shown with country names. The codes are the ones GBIF accepts: not every ISO code is (GBIF refuses `UK` and `EU`), and `XK` (Kosovo) and `XZ` (international waters) are |
 | `basisOfRecord` | one or more of GBIF's values (`HUMAN_OBSERVATION`, …) | |
-| `year` | `2000`, `2000,2020`, `2000,*` or `*,1990` | A reversed range is put right |
+| `year` | `2000`, `2000,2020`, `2000,*` or `*,1990` (also `2000-2020`, `*-1990`) | A reversed range is put right |
 | `license` | `CC0_1_0`, `CC_BY_4_0`, `CC_BY_NC_4_0` | The licence of the **record** |
 | `hasCoordinate` | `true` | |
 | `q` | text | Up to 200 characters |
 
-Every value is checked before it is sent or written to an address, and an invalid one (a country GBIF does not know, a year that is not a number) is dropped, because the API answers those with an error. The same goes for values taken from the page's address.
+Every value is checked before it is sent or written to an address. A **visitor's** value that is not valid (a country GBIF does not know, a year that is not a number), whether typed, chosen or read from the page's address, is dropped, because the API answers those with an error; a year typed into the panel that is not valid leaves the year in force and says so. A **page author's** value that is not valid is not dropped: dropping it would widen the search (a mistyped `taxon-key` would show all of GBIF). See below.
 
 **The page author's filters.** Set filters as attributes on the search element: `<gbif-occurrence-search taxon-key="4QHKG" country="NO" year="2000,*">`. Visitors cannot change or remove these, the filter panel does not offer them, and they are never written to the address. Filters a visitor chooses are separate, and `setFilters()` ignores an attempt to change a fixed one.
+
+**A scope that is not valid sends nothing.** If `taxon-key`, `dataset-key` or one of these filters is not valid (`taxon-key="Puma concolor"`, `taxon-key="4QHKG,623RM"` (one key only), `country="XX"`, `basis-of-record="PRESERVED SPECIMEN"`, or any one bad value in a list), the search is invalid, exactly as an invalid `predicate` is: no request is sent, the panel, table and gallery say "This search cannot be shown" and why, and a `gbif-error` event tells the page (`search.valid` and `search.problem` read it). It works again as soon as the attribute is fixed. `has-coordinate="false"` means false.
 
 **From script.** `search.setFilters({ country: ['NO'], year: '2000,*' })` changes the visitor's filters (`null`, `''` or `[]` removes one), `search.reset()` clears them, and `search.query`, `search.userQuery` and `search.params` read them. A change fires `gbif-query-change`.
 
@@ -296,8 +301,8 @@ With `sync-url`, the visitor's filters are kept in the address: `?gbif_country=N
 
 - The filters are read from the address when the page loads, so a copied address gives the same search.
 - A change by the visitor adds a history entry, so **back and forward** work (`url-history="replace"` replaces the current entry instead).
-- Other parameters and the `#fragment` are left alone.
-- The prefix is `url-prefix` (default `gbif_`). Give each search on a page its own, and `url-prefix=""` for none. A search without `sync-url` ignores the address.
+- Other parameters and the `#fragment` are left exactly as they were written (not re-encoded), so a router on the page can still read them.
+- The prefix is `url-prefix` (default `gbif_`). Give each search on a page its own (two with the same prefix would each rewrite the other's parameters, and the page warns in the console), and `url-prefix=""` for none. A search without `sync-url` ignores the address.
 - Paging is not in the address.
 
 Anything in the address is untrusted: it is validated like every other filter value.
@@ -324,19 +329,21 @@ A page about one occurrence: its record sorted into Darwin Core's groups, its im
 <gbif-occurrence-location   record="#r"></gbif-occurrence-location>
 <gbif-occurrence-groups     record="#r"></gbif-occurrence-groups>
 <gbif-occurrence-extensions record="#r"></gbif-occurrence-extensions>
+<gbif-occurrence-citation   record="#r"></gbif-occurrence-citation>
 ```
 
-`<gbif-occurrence-record>` draws nothing but one message when the record cannot be shown. It fetches the record once, however many cards there are, and the cards follow it. A card finds its record by `record="#r"` (a selector, so it can be anywhere on the page) or by being placed inside it, exactly as the search components find their search. [`examples/occurrences.html`](examples/occurrences.html) is a search whose results open [`examples/occurrence.html`](examples/occurrence.html), which shows all of it. (A page's own code cancels `gbif-occurrence-select` and opens its own page: see the example.)
+`<gbif-occurrence-record>` draws nothing but one message when the record cannot be shown. It fetches the record once, however many cards there are, and the cards follow it. A card finds its record by `record="#r"` (a selector, so it can be anywhere on the page) or by being placed inside it, exactly as the search components find their search. They keep looking: a card (or a table) added before its record or search exists finds it when it appears, and follows the new one if the old is replaced by another with the same selector (a framework that re-renders). While there is none, a card says "No occurrence record was found for this component" (and a search component, "No occurrence search was found"), and the console says why. [`examples/occurrences.html`](examples/occurrences.html) is a search whose results open [`examples/occurrence.html`](examples/occurrence.html), which shows all of it. (A page's own code cancels `gbif-occurrence-select` and opens its own page: see the example.)
 
 | Element | Shows | Own attributes |
 | --- | --- | --- |
 | `gbif-occurrence-record` | Nothing. Holds the record. | `occurrence-key`, `api-base`, `site-base` |
-| `gbif-occurrence-groups` | The record sorted into Darwin Core groups, a card for each. | `groups` |
-| `gbif-occurrence-images` | The images, each with its credit and licence. Other media (sound, video) as links. | `images` |
-| `gbif-occurrence-location` | A map of the location, with the coordinate uncertainty drawn. | `basemap`, `basemap-url`, `basemap-attribution` |
+| `gbif-occurrence-groups` | The record sorted into Darwin Core groups, a card for each. | `groups`, `hide-terms` |
+| `gbif-occurrence-images` | The images, each with its credit and licence. Other media (sound, video) as links. | `images`, `licenses`, `limit` |
+| `gbif-occurrence-location` | A map of the location, with the coordinate uncertainty drawn, and a notice when the location is not exact. | `basemap`, `basemap-url`, `basemap-attribution` |
 | `gbif-occurrence-extensions` | A card for each extension, as a table. | `exclude`, `only` |
+| `gbif-occurrence-citation` | The dataset (linked to GBIF.org), the record on GBIF.org, its licence and rights holder, and the dataset's own citation and DOI. | |
 
-The cards also take `heading`, `heading-level` and `hide-source`.
+The cards also take `heading` (the extensions card only when it shows one extension, the groups card when it shows one group), `heading-level` and `hide-source`. The record element's `site-base` is where the links to GBIF.org go.
 
 ### Darwin Core groups
 
@@ -353,24 +360,25 @@ Darwin Core sorts its terms into classes. The groups follow the standard's order
 | Geological context | Formation, member, bed, geological time |
 | Identification | Type status, who identified it and when |
 | Taxon | The name and its classification |
-| GBIF processing | GBIF's own: keys, processing dates, the issue flags. Not Darwin Core. |
-| Other terms | Terms the publisher used that are not Darwin Core, as published |
+| GBIF processing | GBIF's own: keys, processing dates, the issue flags, derived elevation and depth, administrative areas. Not Darwin Core. |
+| Other terms | Terms that are not Darwin Core or GBIF's own, as the publisher wrote them |
 
-GBIF serves each record twice: **interpreted** (what GBIF made of it: a country name for a code, coordinates as numbers, enumerations such as `HUMAN_OBSERVATION`) and **verbatim** (as published, with the extensions). A row shows the interpreted value, made readable, and *As published:* beneath it when the published value differs. A formatting difference is not a difference: `44.59237` and `44.592370`, a licence as a label and as an address, and the same moment written two ways are one value. A term only the publisher gave is shown as published. Values with several parts (`a|b`) are one to a line, and an address is a link only if it is a web address.
+GBIF serves each record twice: **interpreted** (what GBIF made of it: a country name for a code, coordinates as numbers, enumerations such as `HUMAN_OBSERVATION`) and **verbatim** (as published, with the extensions). A row shows the interpreted value, made readable, and *As published:* beneath it when the published value differs. A formatting difference is not a difference: `44.59237` and `44.592370`, a licence as a label and as an address, and the same moment written two ways are one value. (A time with no time zone is not assumed to be in any zone, so a published time that has one is shown as published, which is common for observations from iNaturalist.) A term only the publisher gave is shown as published. Terms that hold a list (`recordedBy`, `identifiedBy`, `otherCatalogNumbers`, `associatedMedia`, `issues`, and the like) are one value to a line; free text (remarks, `dynamicProperties`) is never split on `|`. An address is a link only if it is a web address. Two terms with the same name in different namespaces (`dc:type` and `dcterms:type`) are two rows, not one with the second's value. The comparison for "As published" is strict where it matters: `0x10` is not `16`, `1e3` is not `1000`, and the path of an address is case-sensitive (its host is not).
 
-The grouping is a fixed table of Darwin Core's terms, so a term added to the standard later is in "Other terms" until the table is updated. A term GBIF did not recognise is in the interpreted record under its own `unknown.org` rewrite as well as in the verbatim one; it is shown once.
+The grouping is a fixed table of Darwin Core's terms, written from the standard's class list (a term the standard moves, as it moved `associatedSequences` to Material entity, is wrong until the table is updated; the table has not been checked term by term against the published standard), so a term added to the standard later is in "Other terms" until the table is updated. GBIF's derived values (`elevation`, `depth`, `distanceFromCentroidInMeters`, the GADM administrative areas, `networkKeys`) are in "GBIF processing", with their units; "Other terms" is for terms that are neither Darwin Core nor GBIF's own. A term GBIF did not recognise is in the interpreted record under its own `unknown.org` rewrite as well as in the verbatim one; it is shown once.
 
-`groups` chooses which cards, and in what order, so a page can put them where it likes: `<gbif-occurrence-groups groups="location event">`. With one group, `heading` replaces the title. The cards fill the width in columns at least `--gbif-group-min-width` wide (default 22rem), running down one column and then the next.
+`groups` chooses which cards, and in what order, so a page can put them where it likes: `<gbif-occurrence-groups groups="location event">`. With one group, `heading` replaces the title. `hide-terms` leaves terms out, by name (`hide-terms="recordedBy identifiedBy"`), and `hide-terms="people"` leaves out the terms that name people (`recordedBy`, `recordedByID`, `identifiedBy`, `identifiedByID`, `georeferencedBy`): GBIF's public data carries the names of collectors and identifiers, and a site that republishes it may need to decide whether to show them (see [Using GBIF data responsibly](#using-gbif-data-responsibly)). In a narrow card (under about 20rem) a term goes above its value. The cards fill the width in columns at least `--gbif-group-min-width` wide (default 22rem), running down one column and then the next.
 
 ### Images, location and extensions
 
-- **Images** come from GBIF's image cache, 600 px wide, so visitors' browsers contact GBIF and not the publisher; if the cache has no picture the publisher's file is tried, then a message with the credit (`images="original"` skips the cache). Each shows its title, who made it, the rights holder, the publisher and its licence, which cannot be hidden, and links to the publisher's page for the image. The record's `media` are used, and only `http(s)` addresses.
-- **Location** draws the point and, when the record gives a coordinate uncertainty, a circle of that radius, fitted to the view. A record without usable coordinates shows no map card (and Leaflet is not downloaded). Basemaps are GBIF's, as for the other maps.
-- **Extensions** are the extra tables a publisher attaches to a record (measurements, resource relationships, DNA-derived data, …), one card each, with the columns its records use, as published. `Multimedia` is left out by default, because the images card shows it (`exclude=""` shows it too, `exclude="Multimedia, Identification"` leaves more out, `only="measurement or fact"` shows just those). A long extension is cut at 100 rows and says how many are left. The extension cards were checked with test records (measurements, resource relationships, DNA-derived data); the live record the example uses has only Multimedia.
+- **Images** come from GBIF's image cache, 600 px wide, so visitors' browsers contact GBIF and not the publisher; if the cache has no picture the publisher's file is tried, then a message with the credit (`images="original"` skips the cache). Each shows its title, who made it, the rights holder, the publisher and its licence, which cannot be hidden, and links to the publisher's page for the image. The record's `media` are used, and only `http(s)` addresses. `licenses` chooses which image licences to show, as on `<gbif-media-gallery>` (`licenses="cc0, cc-by"` or `commercial`; an image whose licence is not stated is not shown when it is set, and the card says how many were left out), and `limit` is the most images to show. A change to either after loading applies at once. The image size is `--gbif-record-image-min` (default 14rem).
+- **Location** is always there. It draws the point and, when the record gives a coordinate uncertainty, a circle of that radius, fitted to the view, and it says how far to trust the location. A notice above the map appears when the location was **made less exact on purpose** (the record's `dataGeneralizations`, which GBIF and publishers use for sensitive species: "Generalised location"), when information was **withheld** (`informationWithheld`), when GBIF **flagged the coordinates as unreliable** (zero coordinates, a mismatch with the country, swapped or negated signs, a failed conversion), or when they are **rounded** (`coordinatePrecision` of 0.01° or coarser) or uncertain by 100 km or more ("Approximate location"). An approximate point is drawn dashed and in the warning colour, the map does not zoom in past a regional view (zoom 8), and a circle of uncertainty over 2,000 km is not drawn (the number is in the text). A record with no usable coordinates says so, names the place the record gives, and shows any notice (a withheld location is explained). Leaflet is only downloaded when there is a map to draw. Basemaps are GBIF's, as for the other maps. What the notice says is what the record says: GBIF's own generalisation of sensitive records is not always marked in the record, so the absence of a notice is not a promise that the point is exact.
+- **Extensions** are the extra tables a publisher attaches to a record (measurements, resource relationships, DNA-derived data, …), one card each, with the columns its records use, as published. `Multimedia` is left out by default, because the images card shows it (`exclude=""` shows it too, `exclude="Multimedia, Identification"` leaves more out (a list with no commas may be separated by spaces when the names are one word), `only="measurement or fact"` shows just those). A long extension is cut at 100 rows and says how many are left. The extension cards were checked with test records (measurements, resource relationships, DNA-derived data); the live record the example uses has only Multimedia.
+- **Citation** gives the dataset (its title, linked to its page on GBIF.org), the record on GBIF.org, the record's licence and rights holder, and the dataset's own citation text and DOI. The names and links come from the record and are there at once; the citation and DOI come from the dataset, which is asked for once the record has arrived (its answer is large, and only a few fields are kept). If that fails, the rest is still shown, and a `gbif-error` tells the page. Put `<gbif-attribution hide-taxonomy>` in the footer of a record page: the names on a record are GBIF's own, not a checklist's, so "Taxonomy: Catalogue of Life" would be wrong there.
 
 ### What is shown when it goes wrong
 
-The record element says it once, so the cards need not each say it: **not found** (and a `gbif-record-notfound` event), **not a key** (a key is digits only, and anything else is never put into an address), or **could not load** (and a `gbif-error`). If only the published record fails, the interpreted one is still shown, without "As published", and a `gbif-error` tells the page. While a record loads, or after its key changes, the cards show nothing of the previous one.
+The record element says it once, so the cards need not each say it: **not found** (HTTP 404 or 410, and a `gbif-record-notfound` event), **not a key** (a key is digits only, and anything else is never put into an address), or **could not load** (and a `gbif-error`). If only the published record fails, the interpreted one is still shown, without "As published", and a `gbif-error` tells the page. While a record loads, or after its key changes, the cards show nothing of the previous one.
 
 Events: `gbif-record-load` (`occurrenceKey`, `scientificName`, `basisOfRecord`, `datasetName`, `country`, `eventDate`, enough for a page title), `gbif-record-notfound`, `gbif-error`, and `gbif-record-change` (`status`, `occurrenceKey`), which the cards listen to.
 
@@ -388,7 +396,7 @@ npm run test:all                  # unit tests and the stubbed browser tests
 
 The two browser tests need [Playwright](https://playwright.dev) to be resolvable and a Chromium browser installed.
 
-The build writes `dist/gbif-components.js` (Lit and all fourteen components, about 40 KB gzipped) and, in `dist/chunks/`, Leaflet (about 54 KB gzipped, only downloaded when a map is drawn). **Serve the whole `dist/` directory**, not just the one file: the entry loads its chunks by relative path. The chunk names are fixed, so a directory can be copied to a CDN under a versioned path. There is no classic-script build, so load the bundle with `<script type="module">`. Content Management Systems that rewrite or concatenate scripts may need that to be turned off for this one. Nothing is published to npm or a CDN yet.
+The build writes `dist/gbif-components.js` (Lit and all fifteen components, about 46 KB gzipped) and, in `dist/chunks/`, Leaflet (about 54 KB gzipped, only downloaded when a map is drawn). **Serve the whole `dist/` directory**, not just the one file: the entry loads its chunks by relative path. The chunk names are fixed, so a directory can be copied to a CDN under a versioned path. There is no classic-script build, so load the bundle with `<script type="module">`. Content Management Systems that rewrite or concatenate scripts may need that to be turned off for this one. Nothing is published to npm or a CDN yet.
 
 If another script has already defined one of the tags, the bundle leaves it alone and warns in the console.
 
@@ -426,9 +434,9 @@ The prototype follows these. They are open for discussion and may change as the 
 
 - **Naming:** all elements use the `gbif-` prefix, as required by the custom elements spec, followed by a descriptive, hyphenated name (for example `gbif-taxon-card`).
 - **Attributes:** use kebab-case HTML attributes (`taxon-key`, `page-size`). Use the GBIF identifiers and parameter names where practical so that people familiar with the API can guess them. Numbers are read defensively: whole numbers within bounds, otherwise the default.
-- **Language:** labels are English only for now. A `language` attribute with translations contributed as data is planned, and is not implemented.
+- **Language:** labels are English only for now, and the components say so (`lang="en"` on each, unless the page has set its own, and left-to-right, with values the publisher wrote taking their own direction). A `language` attribute with translations contributed as data is planned, and is not implemented.
 - **Events:** components emit `CustomEvent`s with a `gbif-` prefix for meaningful user actions and outcomes so host pages can react. Events that would otherwise open a link are cancelable (see [Events](#events)).
-- **Styling:** write plain CSS with BEM class names. Expose theming through CSS custom properties with a `--gbif-` prefix, each with a sensible fallback. The current set is `--gbif-font-family`, `--gbif-font-size`, `--gbif-color-text`, `--gbif-color-muted`, `--gbif-color-link`, `--gbif-color-accent`, `--gbif-color-accent-hover`, `--gbif-color-accent-text`, `--gbif-color-surface`, `--gbif-color-surface-hover`, `--gbif-color-border`, `--gbif-color-control-border`, `--gbif-color-media-background`, `--gbif-color-error`, `--gbif-color-focus`, `--gbif-radius`, `--gbif-card-padding`, `--gbif-gallery-height`, `--gbif-gallery-tile` (the occurrence gallery's tile size) and `--gbif-map-height`. Main elements are also exposed as `::part()` (`card`, `header`, `title`, `body`, `footer`, `source`, and `viewer` or `viewport` where present). Text colour and font are set on the card itself, so a host rule such as `body * { color: … }` cannot make a card unreadable.
+- **Styling:** write plain CSS with BEM class names. Expose theming through CSS custom properties with a `--gbif-` prefix, each with a sensible fallback. The current set is `--gbif-font-family`, `--gbif-font-size`, `--gbif-color-text`, `--gbif-color-muted`, `--gbif-color-link`, `--gbif-color-accent`, `--gbif-color-accent-hover`, `--gbif-color-accent-text`, `--gbif-color-surface`, `--gbif-color-surface-hover`, `--gbif-color-border`, `--gbif-color-control-border`, `--gbif-color-media-background`, `--gbif-color-error`, `--gbif-color-focus`, `--gbif-radius`, `--gbif-card-padding`, `--gbif-gallery-height`, `--gbif-gallery-tile` (the occurrence gallery's tile size), `--gbif-map-height`, `--gbif-record-image-min` (the record page's image size), `--gbif-group-min-width` (the Darwin Core cards' column width), `--gbif-color-notice-background` and `--gbif-color-notice-text` (the location notice). Main elements are also exposed as `::part()` (`card`, `header`, `title`, `body`, `footer`, `source`, and `viewer`, `viewport`, `grid`, `table`, `groups`, `extensions` or `notes` where present). Text colour and font are set on the card itself, so a host rule such as `body * { color: … }` cannot make a card unreadable.
 - **Safe markup and links:** text from the API is escaped. The italic markup GBIF puts in scientific names is the only HTML let through, and only as plain `<i>` and `<em>` tags. Links and image sources from API data are only used if they are `http` or `https`.
 - **Few global side effects.** Components add no global CSS. The bundle registers its custom elements, defines one global, `GbifComponents` (for `configure` and `version`), and uses `sessionStorage` for responses.
 - **Contrast and motion:** default colours meet WCAG AA. Animations stop under `prefers-reduced-motion`, and print styles keep the badge and buttons readable.
@@ -441,7 +449,7 @@ gbif-community-components/
 │   ├── index.js             # registers every component, defines GbifComponents
 │   ├── components/          # one file per component
 │   └── shared/
-│       ├── api.js           # the only code that calls GBIF: URLs, de-duplication, cache, timeout, one retry
+│       ├── api.js           # the only code that calls GBIF: URLs, de-duplication, cache, timeout, up to two retries
 │       ├── taxon.js         # name or key -> taxon: Taxon API for details, match only for names
 │       ├── card-element.js  # base class of every card: title, source note, configuration
 │       ├── taxon-element.js # base class for one taxon: shared inputs, resolving, events
@@ -488,4 +496,6 @@ Detailed contribution guidelines will live in `docs/` as the project develops.
 
 - Follow the [GBIF terms of use](https://www.gbif.org/terms) and the licence of each dataset or media item.
 - Cite GBIF and the original data publishers. The components make this visible, but they cannot choose the right licence for your site: check it.
+- **People's names.** The occurrence page shows what the record says, including the names of the people who collected and identified it (`recordedBy`, `identifiedBy`, and in extensions, other terms). That is public GBIF data under the dataset's licence, but a site that republishes it may need to mention it in its privacy notice or decide not to show it: `hide-terms="people"` on `<gbif-occurrence-groups>` leaves the main terms out. Names inside extension tables and "Other terms" are shown as published, so check a record you intend to show.
+- **Sensitive species.** Publishers and GBIF generalise or withhold the locations of threatened species, and the location card labels what the record says it did. Do not combine components in a way that works around that, and do not add a more exact location from another source.
 - Be mindful of API rate limits. A page with all four components on one taxon makes about ten API requests the first time it is viewed in a tab, and fewer after that. Put a caching proxy in front for busy sites.

@@ -17,9 +17,48 @@ import { GbifCardElement } from './card-element.js';
  * and implement `onLinked()` (found) and `onLinkedChange(detail)` (it changed). The linked
  * element is `this.linked`. If none is found, `_linkStatus` is `missing`.
  *
- * It has to exist once the page has been parsed; one added later is not looked for.
+ * It is looked for again when the page changes: one added after this element (a framework
+ * that builds the page in script) is found when it appears, and if the one it follows is
+ * removed or replaced by another with the same selector, it follows the new one.
  * Subclasses that override updated() must call super.updated(changed).
  */
+
+/**
+ * One observer for every element that follows another, so that a page with many of them
+ * does not run many. It looks only when something in the page changed, and only at elements
+ * that are not following a connected target.
+ */
+const watchers = new Set();
+let observer = null;
+let scheduled = false;
+
+function check() {
+  scheduled = false;
+  for (const watcher of [...watchers]) watcher._recheck();
+}
+
+function schedule() {
+  if (scheduled) return;
+  scheduled = true;
+  queueMicrotask(check);
+}
+
+function watch(element) {
+  watchers.add(element);
+  observer ??= new MutationObserver(schedule);
+  observer.observe(document, { childList: true, subtree: true });
+  const root = element.getRootNode();
+  if (root !== document && root instanceof ShadowRoot) observer.observe(root, { childList: true, subtree: true });
+}
+
+function unwatch(element) {
+  watchers.delete(element);
+  if (!watchers.size) {
+    observer?.disconnect();
+    observer = null;
+  }
+}
+
 export class GbifLinkedElement extends GbifCardElement {
   static properties = {
     _linkStatus: { state: true }
@@ -46,7 +85,20 @@ export class GbifLinkedElement extends GbifCardElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    this._bindRun += 1; // anything still waiting to bind is not wanted any more
+    unwatch(this);
     this._unbind();
+  }
+
+  /** The page changed: has the element I follow gone, or has the one I was looking for come? */
+  _recheck() {
+    if (!this.isConnected) return;
+    if (this._linkStatus === 'bound') {
+      if (!this.linked?.isConnected) this._bind();
+    } else if (this._linkStatus === 'missing') {
+      const el = this._find();
+      if (el && el.localName === this.constructor.linkTag) this._bind();
+    }
   }
 
   updated(changed) {
@@ -75,6 +127,12 @@ export class GbifLinkedElement extends GbifCardElement {
     this._boundSelector = this._selector;
     this._unbind();
     this._linkStatus = 'looking';
+    watch(this);
+
+    // One tick, so that a page that sets things up right after the bundle loads (`configure()`, the
+    // attributes of the elements it follows) does so before this asks anything.
+    await null;
+    if (run !== this._bindRun || !this.isConnected) return;
 
     let el = this._find();
     // A page being parsed: the element may simply not have been reached yet.
@@ -89,7 +147,7 @@ export class GbifLinkedElement extends GbifCardElement {
       if (customElements.get(linkTag)) customElements.upgrade(el);
       else await customElements.whenDefined(linkTag);
     }
-    if (run !== this._bindRun) return;
+    if (run !== this._bindRun || !this.isConnected) return;
 
     if (!el || el.localName !== linkTag || typeof el[linkReady] !== 'function') {
       this._linkStatus = 'missing';

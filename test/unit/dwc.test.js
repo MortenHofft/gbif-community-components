@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { DWC_GROUPS, humanize, sentenceCase, localName, groupOf, cleanOccurrenceKey, buildGroups, buildExtensions, buildMedia, buildPoint } from '../../src/shared/dwc.js';
+import { DWC_GROUPS, humanize, sentenceCase, localName, groupOf, cleanOccurrenceKey, buildGroups, buildExtensions, buildMedia, buildPoint, buildLocationNotes } from '../../src/shared/dwc.js';
 
 const DWC = 'http://rs.tdwg.org/dwc/terms/';
 const DC = 'http://purl.org/dc/terms/';
@@ -220,14 +220,58 @@ test('media: usable still images with their credit, other media apart, nothing u
 });
 
 test('a point is only made from usable coordinates', () => {
-  assert.deepEqual(buildPoint({ decimalLatitude: -51.1, decimalLongitude: -72.9, coordinateUncertaintyInMeters: 30 }), { lat: -51.1, lng: -72.9, uncertainty: 30 });
-  assert.deepEqual(buildPoint({ decimalLatitude: '10.5', decimalLongitude: '20' }), { lat: 10.5, lng: 20, uncertainty: null });
-  assert.deepEqual(buildPoint({ decimalLatitude: 0, decimalLongitude: 0 }), { lat: 0, lng: 0, uncertainty: null }, 'zero is a place');
+  const point = (record) => {
+    const p = buildPoint(record);
+    return p && { lat: p.lat, lng: p.lng, uncertainty: p.uncertainty };
+  };
+  assert.deepEqual(point({ decimalLatitude: -51.1, decimalLongitude: -72.9, coordinateUncertaintyInMeters: 30 }), { lat: -51.1, lng: -72.9, uncertainty: 30 });
+  assert.deepEqual(point({ decimalLatitude: '10.5', decimalLongitude: '20' }), { lat: 10.5, lng: 20, uncertainty: null });
+  assert.deepEqual(point({ decimalLatitude: 0, decimalLongitude: 0 }), { lat: 0, lng: 0, uncertainty: null }, 'zero is a place (and is flagged, see below)');
   assert.equal(buildPoint({ decimalLatitude: 1, decimalLongitude: 2, coordinateUncertaintyInMeters: 0 }).uncertainty, null);
   assert.equal(buildPoint({ decimalLatitude: 1, decimalLongitude: 2, coordinateUncertaintyInMeters: -5 }).uncertainty, null);
   for (const bad of [{}, null, undefined, { decimalLatitude: 91, decimalLongitude: 0 }, { decimalLatitude: 0, decimalLongitude: 181 }, { decimalLatitude: '', decimalLongitude: '' }, { decimalLatitude: null, decimalLongitude: null }, { decimalLatitude: 'north', decimalLongitude: 1 }, { decimalLatitude: 1 }, { decimalLatitude: NaN, decimalLongitude: 1 }, { decimalLatitude: [1], decimalLongitude: 1 }]) {
     assert.equal(buildPoint(bad), null, JSON.stringify(bad));
   }
+});
+
+test('a location that is not exact says so: generalised, withheld, flagged, rounded, very uncertain', () => {
+  const exact = buildPoint({ decimalLatitude: 51.1, decimalLongitude: -72.9, coordinateUncertaintyInMeters: 30, coordinatePrecision: 0.00001, issues: ['CONTINENT_DERIVED_FROM_COORDINATES'] });
+  assert.deepEqual(exact.notes, [], 'an ordinary record has nothing to say');
+  assert.equal(exact.approximate, false);
+
+  const generalised = buildPoint({ decimalLatitude: 51.1, decimalLongitude: -72.9, dataGeneralizations: 'generalised to 0.1° to protect a nesting site', informationWithheld: 'exact locality withheld' });
+  assert.deepEqual(generalised.notes.map((n) => n.kind), ['generalized', 'withheld']);
+  assert.match(generalised.notes[0].text, /less exact on purpose: generalised to 0\.1° to protect a nesting site/);
+  assert.equal(generalised.approximate, true);
+
+  const zero = buildPoint({ decimalLatitude: 0, decimalLongitude: 0, issues: ['ZERO_COORDINATE'] });
+  assert.deepEqual(zero.notes.map((n) => n.kind), ['flagged']);
+  assert.match(zero.notes[0].text, /Do not rely on this location: the coordinates are 0°, 0°\./);
+  assert.equal(zero.approximate, true);
+  // The same without GBIF's flag (a placeholder is a placeholder).
+  assert.deepEqual(buildPoint({ decimalLatitude: 0, decimalLongitude: 0 }).notes.map((n) => n.kind), ['flagged']);
+  assert.equal(buildPoint({ decimalLatitude: 0, decimalLongitude: 0, issues: ['ZERO_COORDINATE'] }).notes.length, 1, 'said once');
+
+  const mismatch = buildPoint({ decimalLatitude: 10, decimalLongitude: 10, issues: ['COUNTRY_COORDINATE_MISMATCH', 'PRESUMED_SWAPPED_COORDINATE', 'RECORDED_DATE_INVALID'] });
+  assert.match(mismatch.notes[0].text, /outside the stated country; latitude and longitude look swapped\./);
+  assert.ok(!/date/i.test(mismatch.notes[0].text), 'flags that are not about the location are not listed here');
+
+  const rounded = buildPoint({ decimalLatitude: 10, decimalLongitude: 10, coordinatePrecision: 0.1 });
+  assert.deepEqual(rounded.notes.map((n) => n.kind), ['coarse']);
+  assert.match(rounded.notes[0].text, /rounded to 0\.1° \(about 11 km\)/);
+  assert.equal(buildPoint({ decimalLatitude: 10, decimalLongitude: 10, issues: ['COORDINATE_ROUNDED'] }).approximate, true);
+
+  const wide = buildPoint({ decimalLatitude: 10, decimalLongitude: 10, coordinateUncertaintyInMeters: 9_000_000 });
+  assert.deepEqual(wide.notes.map((n) => n.kind), ['coarse']);
+  assert.match(wide.notes[0].text, /uncertain by 9,000 km/);
+  assert.equal(buildPoint({ decimalLatitude: 10, decimalLongitude: 10, coordinateUncertaintyInMeters: 99_999 }).approximate, false);
+
+  // Without a point the notes are still there: a withheld location is explained.
+  assert.equal(buildPoint({ informationWithheld: 'withheld' }), null);
+  assert.deepEqual(buildLocationNotes({ informationWithheld: 'coordinates withheld for a threatened species' }).map((n) => n.kind), ['withheld']);
+  assert.deepEqual(buildLocationNotes(null), []);
+  assert.equal(buildLocationNotes({ dataGeneralizations: 'x'.repeat(1000) })[0].text.length < 460, true, 'long notes are cut');
+  assert.deepEqual(buildLocationNotes({ dataGeneralizations: { not: 'text' }, issues: 'ZERO_COORDINATE' }), [], 'not text, not a list: ignored');
 });
 
 /* ---------- what the first look at real data showed ---------- */
@@ -295,4 +339,78 @@ test('the same moment written two ways is not a difference, a different moment i
   assert.equal(row(groups, 'record-level', 'modified').published, undefined);
   assert.equal(row(groups, 'identification', 'dateIdentified').published, '2026-01-03T03:06:07Z');
   assert.equal(row(groups, 'event', 'eventDate').published, '2026-01-02T12:30:25-08:00');
+});
+
+test('free text is not split on "|"; only terms that are lists are', () => {
+  const groups = buildGroups({
+    interpreted: { occurrenceRemarks: 'trap A | trap B, "pipe | separated"', dynamicProperties: '{"a":"x | y"}', recordedBy: 'Ana|Ben' },
+    verbatim: { 'http://example.org/ns/note': 'a | b' }
+  });
+  assert.equal(row(groups, 'occurrence', 'occurrenceRemarks').text, 'trap A | trap B, "pipe | separated"');
+  assert.equal(row(groups, 'occurrence', 'occurrenceRemarks').parts, undefined);
+  assert.equal(row(groups, 'record-level', 'dynamicProperties').text, '{"a":"x | y"}');
+  assert.deepEqual(row(groups, 'occurrence', 'recordedBy').parts.map((p) => p.text), ['Ana', 'Ben']);
+  assert.equal(group(groups, 'other').rows[0].text, 'a | b', 'a term outside Darwin Core is text');
+});
+
+test('dc:type and dcterms:type are two rows, not one with the last value', () => {
+  const groups = buildGroups({ verbatim: { [`${DC}type`]: 'Text', 'http://purl.org/dc/elements/1.1/type': 'PhysicalObject' } });
+  const rows = group(groups, 'record-level').rows.filter((r) => /^Type/.test(r.label));
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map((r) => r.text).sort(), ['PhysicalObject', 'Text']);
+  assert.ok(rows.some((r) => r.label === 'Type (dc)'), rows.map((r) => r.label).join());
+});
+
+test('GBIF\'s unknown.org rewrite joins its verbatim term only when there is one candidate', () => {
+  const one = buildGroups({ interpreted: { 'http://unknown.org/code': 'x' }, verbatim: { 'http://a.example/code': 'A' } });
+  const rowsOne = group(one, 'other').rows;
+  assert.equal(rowsOne.length, 1);
+  assert.equal(rowsOne[0].text, 'x');
+  assert.equal(rowsOne[0].published, 'A');
+
+  // Two terms called `code` in different namespaces: which one GBIF rewrote cannot be told, so none gets the value.
+  const two = buildGroups({ interpreted: { 'http://unknown.org/code': 'x' }, verbatim: { 'http://a.example/code': 'A', 'http://b.example/code': 'B' } });
+  const rowsTwo = group(two, 'other').rows;
+  assert.equal(rowsTwo.length, 3);
+  assert.equal(rowsTwo.find((r) => r.uri === 'http://a.example/code').published, undefined);
+  assert.equal(rowsTwo.find((r) => r.uri === 'http://a.example/code').text, 'A');
+  assert.equal(rowsTwo.find((r) => r.uri === 'http://b.example/code').text, 'B');
+});
+
+test('GBIF\'s derived values are in GBIF processing, with their units, and nothing is dropped', () => {
+  const groups = buildGroups({
+    interpreted: { elevation: 120, elevationAccuracy: 5, depth: 3.5, distanceFromCentroidInMeters: 800, networkKeys: ['n1', 'n2'], repatriated: false, gadm: { level0: { gid: 'CHL', name: 'Chile' }, level1: { gid: 'CHL.12_1', name: 'Magallanes' }, level2: {} }, associatedSequences: 'GenBank:AB1' }
+  });
+  assert.equal(row(groups, 'gbif', 'elevation').text, '120 m');
+  assert.equal(row(groups, 'gbif', 'depth').text, '3.5 m');
+  assert.equal(row(groups, 'gbif', 'distanceFromCentroidInMeters').text, '800 m');
+  assert.deepEqual(row(groups, 'gbif', 'networkKeys').parts.map((p) => p.text), ['n1', 'n2']);
+  assert.equal(row(groups, 'gbif', 'repatriated').text, 'No');
+  assert.equal(row(groups, 'gbif', 'gadm.level0').text, 'Chile (CHL)');
+  assert.equal(row(groups, 'gbif', 'gadm.level1').label, 'Administrative area, level 1 (GADM)');
+  assert.equal(row(groups, 'gbif', 'gadm.level2'), undefined, 'a level with nothing in it');
+  assert.equal(row(groups, 'material-entity', 'associatedSequences').text, 'GenBank:AB1');
+  assert.equal(group(groups, 'other'), undefined, 'nothing GBIF-derived lands in "Other terms"');
+});
+
+test('"as published" is shown for real differences, and hidden only for the same value written differently', () => {
+  const published = (interpreted, verbatim) => row(buildGroups({ interpreted, verbatim }), ...verbatimGroup)?.published;
+  const verbatimGroup = ['record-level', 'identifier'];
+  const pub = (a, b) => published({ identifier: a }, { 'http://purl.org/dc/terms/identifier': b });
+  assert.equal(pub('ABC', 'abc'), undefined, 'capitals alone are not a difference');
+  assert.equal(pub('16', '0x10'), '0x10', 'hexadecimal is not decimal');
+  assert.equal(pub('1000', '1e3'), '1e3', 'scientific notation is not what was published');
+  assert.equal(pub('16', '16.0'), undefined, 'a decimal written two ways is one value');
+  assert.equal(pub('5', ' 5 '), undefined);
+  assert.equal(pub('https://example.org/A', 'http://example.org/a'), 'http://example.org/a', 'the path is case-sensitive');
+  assert.equal(pub('https://EXAMPLE.org/a', 'http://example.org/a'), undefined, 'the host is not');
+  assert.equal(pub('https://example.org/a', 'https://example.org/a?x=1'), 'https://example.org/a?x=1', 'a query is part of the address');
+  const licence = buildGroups({ interpreted: { license: 'http://creativecommons.org/licenses/by/4.0/legalcode' }, verbatim: { 'http://purl.org/dc/terms/license': 'http://creativecommons.org/licenses/by/4.0/' } });
+  assert.equal(row(licence, 'record-level', 'license').published, undefined, 'the legalcode page and the licence are one licence');
+});
+
+test('media: the address to load is the checked one, the exact string is kept for the image cache', () => {
+  const { images } = buildMedia({ media: [{ type: 'StillImage', identifier: '  https://img.test/a b.png ' }] });
+  assert.equal(images[0].identifier, '  https://img.test/a b.png ', 'exact, because GBIF names a cached image after a hash of it');
+  assert.equal(images[0].url, 'https://img.test/a%20b.png', 'checked, trimmed and written out in full');
 });

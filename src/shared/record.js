@@ -25,12 +25,13 @@ export async function fetchRecord({ apiBase, key }) {
   try {
     interpreted = await getJson(buildUrl(apiBase, `/v1/occurrence/${safe}`));
   } catch (error) {
-    if (error.status === 404) return { found: false };
+    // 404: no such record. 410: it was there and has been removed. Either way there is nothing to show.
+    if (error.status === 404 || error.status === 410) return { found: false };
     throw error;
   }
   if (!interpreted || typeof interpreted !== 'object' || Array.isArray(interpreted)) return { found: false };
 
   const { data, error } = await verbatimRequest;
   const verbatim = data && typeof data === 'object' && !Array.isArray(data) ? data : null;
-  return { found: true, interpreted, verbatim, verbatimError: error && error.status !== 404 ? error : undefined };
+  return { found: true, interpreted, verbatim, verbatimError: error && error.status !== 404 && error.status !== 410 ? error : undefined };
 }

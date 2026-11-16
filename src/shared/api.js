@@ -12,7 +12,9 @@ import { md5 } from './md5.js';
  *   max-age and fetch again on every page view; this layer restores the
  *   freshness the API actually asks for. It is per tab, holds nothing
  *   personal, and every part of it is optional: if storage is unavailable or
- *   full, requests simply go to the network.
+ *   full, requests simply go to the network. It never uses more than
+ *   MAX_STORED_TOTAL characters (the oldest entries go first), so it cannot
+ *   crowd out what the host page keeps there.
  * - Failures are never remembered.
  * - Requests time out, so a hung connection ends in an error, not an endless
  *   "Loading".
@@ -25,7 +27,10 @@ import { md5 } from './md5.js';
  */
 
 const MAX_ENTRIES = 200;
-const MAX_STORED_BYTES = 200_000;
+// session storage belongs to the host page's origin and is shared with the page's own code (its quota is
+// about 5 MB for everyone), so this layer keeps to a small budget of its own and drops its oldest entries first.
+const MAX_STORED_ENTRY = 100_000;
+const MAX_STORED_TOTAL = 1_000_000;
 const MAX_FRESH_SECONDS = 3600;
 const STORAGE_PREFIX = 'gbif-components:v1:';
 
@@ -62,7 +67,7 @@ function takeTurn() {
  */
 const shouldRetry = (err) => RETRY_STATUSES.includes(err.status) || (err.status === 0 && !err.timedOut);
 
-/** How long to wait before the one retry (mainly for tests). */
+/** How long to wait before the first retry; each next one waits twice as long (mainly for tests). */
 export function setRetryDelay(ms) {
   retryDelayMs = Number.isFinite(ms) && ms >= 0 ? ms : 1200;
 }
@@ -118,6 +123,18 @@ function readStored(url) {
   return undefined;
 }
 
+/** What this layer has stored: `{ key, size, at, expires }` for each entry, read cheaply from the front of each. */
+function storedEntries() {
+  const entries = [];
+  for (const key of Object.keys(sessionStorage)) {
+    if (!key.startsWith(STORAGE_PREFIX)) continue;
+    const raw = sessionStorage.getItem(key) ?? '';
+    const head = /^\{"at":(\d+),"expires":(\d+)/.exec(raw);
+    entries.push({ key, size: key.length + raw.length, at: head ? Number(head[1]) : 0, expires: head ? Number(head[2]) : 0 });
+  }
+  return entries;
+}
+
 function clearStored() {
   try {
     for (const key of Object.keys(sessionStorage)) {
@@ -131,11 +148,23 @@ function clearStored() {
 function writeStored(url, data, seconds) {
   if (!(seconds > 0)) return;
   try {
-    const raw = JSON.stringify({ expires: Date.now() + seconds * 1000, data });
-    if (raw.length > MAX_STORED_BYTES) return;
-    sessionStorage.setItem(STORAGE_PREFIX + url, raw);
+    const now = Date.now();
+    const raw = JSON.stringify({ at: now, expires: now + seconds * 1000, data });
+    const key = STORAGE_PREFIX + url;
+    if (key.length + raw.length > MAX_STORED_ENTRY) return;
+
+    // Make room: expired entries first, then the oldest, until this one fits the budget.
+    const others = storedEntries().filter((entry) => entry.key !== key);
+    others.sort((a, b) => (a.expires < now ? -1 : 0) - (b.expires < now ? -1 : 0) || a.at - b.at);
+    let used = others.reduce((sum, entry) => sum + entry.size, 0);
+    while (others.length && used + key.length + raw.length > MAX_STORED_TOTAL) {
+      const oldest = others.shift();
+      sessionStorage.removeItem(oldest.key);
+      used -= oldest.size;
+    }
+    sessionStorage.setItem(key, raw);
   } catch {
-    clearStored(); // most likely full: start over rather than fail
+    clearStored(); // most likely full (the host page's own data may fill it): give back all of ours
   }
 }
 
@@ -152,7 +181,13 @@ async function attempt(call) {
   try {
     const res = await fetch(url, { ...init, headers: { Accept: 'application/json', ...init?.headers }, signal: controller.signal });
     if (!res.ok) throw new GbifApiError(`HTTP ${res.status}`, { url, status: res.status });
-    const data = await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      // An answer that is not JSON will not be JSON next time either: not worth a retry (status is the answer's, not 0).
+      throw new GbifApiError('The answer was not JSON', { url, status: res.status || 200 });
+    }
     writeStored(call.storageKey, data, freshSeconds(res.headers?.get?.('cache-control')));
     return data;
   } catch (err) {

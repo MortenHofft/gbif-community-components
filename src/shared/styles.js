@@ -19,6 +19,11 @@ export const tokens = css`
   :host {
     display: block;
     box-sizing: border-box;
+    /* In a grid or flex layout a wide table would otherwise stretch its column (and the page) instead of scrolling. */
+    min-width: 0;
+    /* The labels are English, so they read left to right even on a right-to-left page. Values the publisher wrote
+       (names, places, remarks) take their own direction: see \`unicode-bidi: plaintext\` on the cells. */
+    direction: ltr;
   }
   :host([hidden]) {
     display: none;
