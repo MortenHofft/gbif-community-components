@@ -18,7 +18,7 @@ import { tokens } from '../shared/styles.js';
  * Cards placed inside it are shown as usual.
  *
  * Attributes: `occurrence-key` (GBIF's occurrence key: digits only), `api-base`, `site-base`.
- * Events: `gbif-record-load` (the record arrived; detail has `occurrenceKey`, `scientificName`,
+ * Events: `gbif-record-load` (the record arrived; detail has `occurrenceKey`, `scientificName`, `kingdom`,
  * `basisOfRecord`, `datasetName`, `country`, `eventDate`), `gbif-record-notfound`, `gbif-error`,
  * and `gbif-record-change`, which the cards listen to (detail `{ status, occurrenceKey }`).
  */
@@ -141,6 +141,7 @@ export class GbifOccurrenceRecord extends LitElement {
       emit(this, 'gbif-record-load', {
         occurrenceKey: key,
         scientificName: text(r.scientificName),
+        kingdom: text(r.kingdom),
         basisOfRecord: text(r.basisOfRecord),
         datasetName: text(r.datasetName),
         country: text(r.country),

@@ -18,6 +18,7 @@
       .lede { margin-top: 0; color: #667085; }
       .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); align-items: start; }
       .stack { display: grid; gap: 1rem; }
+      .flow { margin: 1rem 0 0; font-weight: 600; }
       .picker { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0; }
       .picker button { padding: 0.35rem 0.8rem; border: 1px solid #d5dbe1; border-radius: 999px; background: #fff; font: inherit; cursor: pointer; }
       .picker button:hover { background: #f2f4f7; }
@@ -59,14 +60,35 @@
     </div>
     <div class="grid">
       <div class="stack">
-        <gbif-taxon-card id="main-card" scientific-name="Puma concolor" follow-selection></gbif-taxon-card>
-        <gbif-type-specimens class="follower" scientific-name="Puma concolor" page-size="5"></gbif-type-specimens>
+        <gbif-taxon-card id="main-card" follow-selection></gbif-taxon-card>
+        <gbif-type-specimens class="follower" page-size="5"></gbif-type-specimens>
       </div>
       <div class="stack">
-        <gbif-media-gallery class="follower" scientific-name="Puma concolor" limit="12"></gbif-media-gallery>
-        <gbif-occurrence-map class="follower" scientific-name="Puma concolor"></gbif-occurrence-map>
+        <gbif-media-gallery class="follower" limit="12"></gbif-media-gallery>
+        <gbif-occurrence-map class="follower"></gbif-occurrence-map>
       </div>
     </div>
+
+    <!-- The next step of the flow. The link is set from the taxon the card resolved (see the script below). -->
+    <p class="flow"><a id="occurrences-link" href="occurrences.html?taxon=4QHKG&amp;name=Puma%20concolor">Search the occurrences of this taxon →</a></p>
+
+    <!-- The starting taxon. This is an ordinary script, placed before the bundle runs, so that the cards start with the
+         right taxon and do not ask for a default one first. A page that links here sets ?name=… (and ?kingdom=…) or ?taxon=… -->
+    <script>
+      (() => {
+        const params = new URLSearchParams(location.search);
+        const taxon = params.get('taxon');
+        const name = params.get('name') || 'Puma concolor';
+        const kingdom = params.get('kingdom');
+        for (const el of document.querySelectorAll('#main-card, .follower')) {
+          if (taxon) el.setAttribute('taxon-key', taxon);
+          else {
+            el.setAttribute('scientific-name', name);
+            if (kingdom) el.setAttribute('kingdom', kingdom);
+          }
+        }
+      })();
+    </script>
 
     <h3>Events seen on this page</h3>
     <pre id="event-log" aria-live="polite"></pre>
@@ -110,6 +132,13 @@
           el.kingdom = kingdom;
         }
       }
+
+      // The next step: a search for the occurrences of the taxon the card has found. The key is a key in the card's
+      // checklist, which is the checklist the search uses too.
+      card.addEventListener('gbif-taxon-resolved', (event) => {
+        const { taxonKey, scientificName } = event.detail;
+        document.querySelector('#occurrences-link').href = `occurrences.html?taxon=${encodeURIComponent(taxonKey)}&name=${encodeURIComponent(scientificName ?? '')}`;
+      });
 
       // The page reacts when the visitor picks a taxon in the classification.
       card.addEventListener('gbif-taxon-select', (event) => {
