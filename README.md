@@ -400,6 +400,17 @@ The build writes `dist/gbif-components.js` (Lit and all fifteen components, abou
 
 If another script has already defined one of the tags, the bundle leaves it alone and warns in the console.
 
+### Loading the built files from GitHub (jsDelivr)
+
+A GitHub Action (`.github/workflows/publish-dist.yml`) builds the bundle and publishes **only the built files** to a `dist` branch and a `dist-<version>` tag, which [jsDelivr](https://www.jsdelivr.com/) serves with the right headers (GitHub's own raw URLs do not work for module scripts). The source branches stay free of build output. The repository must be public.
+
+```html
+<script type="module" src="https://cdn.jsdelivr.net/gh/MortenHofft/gbif-community-components@dist-v0.0.1-test/gbif-components.js"></script>
+<gbif-taxon-card scientific-name="Puma concolor"></gbif-taxon-card>
+```
+
+To publish a version, **push a tag** that starts with `v` (`git tag v0.0.1-test && git push origin v0.0.1-test`), or run the workflow by hand from the repository's Actions tab with a version of your choice. The tag `dist-<version>` is never moved: a URL that names one always returns the same bytes, so it is the one to use on a real site. `@dist` follows the latest build (jsDelivr caches a branch for up to 12 hours), and is for trying things out only. The `chunks/` folder is served from the same place and loaded by the bundle on demand (Leaflet, only when a map is drawn). This is a test route: nothing is published to npm, and there is no stable version yet.
+
 ### The demo site
 
 [`examples/`](examples/) holds four linked pages that show the components together, against the live GBIF API:
@@ -410,7 +421,7 @@ If another script has already defined one of the tags, the bundle leaves it alon
 
 `search.html` is a further page for searching with a subset given as a predicate. `npm run dev` serves them with live reload.
 
-`npm run build:demo` builds a static copy in `demo/` that loads the **built** bundle (the pages in `examples/` import the source, which only a dev server can serve). It needs no server of its own, so any static host works. On **Vercel**: import the repository as a new project, and leave the settings as they are (`vercel.json` sets the build command `npm run build:demo` and the output directory `demo`; the framework preset is "Other"). Every push to `main` then deploys. The pages call `api.gbif.org` and `tile.gbif.org` from the visitor's browser, so nothing else needs configuring.
+`npm run build:demo` builds a static copy in `demo/` that loads the **built** bundle (the pages in `examples/` import the source, which only a dev server can serve). It needs no server of its own, so any static host works. On **Vercel**: import the repository as a new project, and leave the settings as they are (Vercel detects Vite, which is right; `vercel.json` overrides the build command with `npm run build:demo` and the output directory with `demo`, and a "build may fail" notice about the preset can be ignored once `vercel.json` is in the branch being deployed). Every push to `main` then deploys. The pages call `api.gbif.org` and `tile.gbif.org` from the visitor's browser, so nothing else needs configuring.
 
 ## Scope
 
