@@ -1974,7 +1974,7 @@ async function run() {
     await page.mount(RECORD(7001, ''));
     await page.waitForFunction(() => window.__events.some((e) => e.name === 'gbif-record-load'), null, T);
     const [load] = await page.events('gbif-record-load');
-    assert.deepEqual(load.detail, { occurrenceKey: '7001', scientificName: 'Puma concolor araucanus (Osgood, 1943)', basisOfRecord: 'PRESERVED_SPECIMEN', datasetName: 'Natural History Museum Collection', country: 'Chile', eventDate: '1940-01-03' });
+    assert.deepEqual(load.detail, { occurrenceKey: '7001', scientificName: 'Puma concolor araucanus (Osgood, 1943)', kingdom: 'Animalia', basisOfRecord: 'PRESERVED_SPECIMEN', datasetName: 'Natural History Museum Collection', country: 'Chile', eventDate: '1940-01-03' });
   });
 
   /* ---------- the demo pages ---------- */
