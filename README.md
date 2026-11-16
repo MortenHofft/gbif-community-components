@@ -410,7 +410,7 @@ If another script has already defined one of the tags, the bundle leaves it alon
 
 `search.html` is a further page for searching with a subset given as a predicate. `npm run dev` serves them with live reload.
 
-`npm run build:demo` builds a static copy in `demo/` that loads the **built** bundle (the pages in `examples/` import the source, which only a dev server can serve). It needs no server of its own, so any static host works. On **Vercel**: import the repository as a new project, and leave the settings as they are (`vercel.json` sets the build command `npm run build:demo` and the output directory `demo`; the framework preset is "Other"). Every push to `main` then deploys. The pages call `api.gbif.org` and `tile.gbif.org` from the visitor's browser, so nothing else needs configuring.
+`npm run build:demo` builds a static copy in `demo/` that loads the **built** bundle (the pages in `examples/` import the source, which only a dev server can serve). It needs no server of its own, so any static host works. On **Vercel**: import the repository as a new project, and leave the settings as they are (Vercel detects Vite, which is right; `vercel.json` overrides the build command with `npm run build:demo` and the output directory with `demo`, and a "build may fail" notice about the preset can be ignored once `vercel.json` is in the branch being deployed). Every push to `main` then deploys. The pages call `api.gbif.org` and `tile.gbif.org` from the visitor's browser, so nothing else needs configuring.
 
 ## Scope
 
