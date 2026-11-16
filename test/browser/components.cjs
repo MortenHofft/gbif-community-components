@@ -12,7 +12,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { chromium } = require('playwright');
 
-const PORT = 5198;
+const PORT = Number(process.env.PORT) || 5198;
 const PAGE_URL = `http://127.0.0.1:${PORT}/test/browser/fixture.html`;
 const CK = '7ddf754f-d193-4cc9-b351-99906754a03b';
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
@@ -82,6 +82,7 @@ function makeRecords() {
       license: OCC_LICENSE_URL[OCC_LICENSES[(i >> 1) % 3]],
       _license: OCC_LICENSES[(i >> 1) % 3],
       _hasCoordinate: i % 2 === 0,
+      _taxonKey: '4QHKG',
       media: i % 3 === 0 ? [{ type: 'StillImage', identifier: `https://img.test/occ-${i}.png`, license: imageLicenses[((i / 3) | 0) % 3], rightsHolder: `Photographer ${i}` }] : []
     };
   });
@@ -90,7 +91,7 @@ const FACET_FIELD = { COUNTRY: ['country', (r) => r.countryCode], BASIS_OF_RECOR
 
 /** Why GBIF would answer this query with a 400, or null. */
 function invalidQuery(q) {
-  for (const c of q.getAll('country')) if (!['NO', 'SE', 'US', 'CL', 'AR', 'DK'].includes(c)) return `Cannot parse ${c} into a known Country`;
+  for (const c of q.getAll('country')) if (!['NO', 'SE', 'US', 'CL', 'AR', 'DK', 'XZ'].includes(c)) return `Cannot parse ${c} into a known Country`;
   for (const b of q.getAll('basisOfRecord')) if (!['HUMAN_OBSERVATION', 'PRESERVED_SPECIMEN', 'MACHINE_OBSERVATION', 'OCCURRENCE', 'OBSERVATION'].includes(b)) return `bad basisOfRecord ${b}`;
   for (const l of q.getAll('license')) if (!OCC_LICENSES.includes(l)) return `bad license ${l}`;
   const year = q.get('year');
@@ -111,6 +112,11 @@ function matchesQuery(rec, q, skip) {
     if (from !== '*' && rec.year < Number(from)) return false;
     if ((to ?? from) !== '*' && rec.year > Number(to ?? from)) return false;
   }
+  // GBIF reads taxonKey in a checklist: without the checklistKey it would be another taxonomy's key.
+  const taxonKey = q.get('taxonKey');
+  if (taxonKey && (taxonKey !== rec._taxonKey || q.get('checklistKey') !== CK)) return false;
+  const datasetKey = q.get('datasetKey');
+  if (datasetKey && datasetKey !== rec.datasetName) return false;
   if (q.get('hasCoordinate') === 'true' && !rec._hasCoordinate) return false;
   const text = q.get('q');
   if (text && !`${rec.scientificName} ${rec.recordedBy}`.toLowerCase().includes(text.toLowerCase())) return false;
@@ -137,7 +143,7 @@ function evalPredicate(p, r) {
     case 'and': return p.predicates.every((c) => evalPredicate(c, r));
     case 'or': return p.predicates.some((c) => evalPredicate(c, r));
     case 'not': return !evalPredicate(p.predicate, r);
-    case 'equals': return p.key === 'TAXON_KEY' ? true : String(value(p.key)) === String(p.value);
+    case 'equals': return p.key === 'TAXON_KEY' ? String(p.value) === r._taxonKey && p.checklistKey === CK : String(value(p.key)) === String(p.value);
     case 'in': return p.values.map(String).includes(String(value(p.key)));
     case 'greaterThanOrEquals': return Number(value(p.key)) >= Number(p.value);
     case 'lessThanOrEquals': return Number(value(p.key)) <= Number(p.value);
@@ -247,7 +253,7 @@ async function installStubs(page, S) {
       return route.fulfill({ headers: { 'access-control-allow-origin': '*' }, status: 400, body: bad });
     }
     const matching = S.records.filter((r) => matchesQuery(r, q));
-    const strip = ({ _license, _hasCoordinate, ...rest }) => rest;
+    const strip = ({ _license, _hasCoordinate, _taxonKey, ...rest }) => rest;
     const offset = Number(q.get('offset') || 0);
     const limit = Number(q.get('limit') || 20);
     const facets = q.getAll('facet').map((name) => {
@@ -285,7 +291,7 @@ async function installStubs(page, S) {
       const sorted = [...counts].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0]))).slice(0, Number(body.facetLimit || 10));
       return { field, counts: sorted.map(([name, count]) => ({ name, count })) };
     });
-    const strip = ({ _license, _hasCoordinate, ...rest }) => rest;
+    const strip = ({ _license, _hasCoordinate, _taxonKey, ...rest }) => rest;
     return route.fulfill({ status: 201, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ count: matching.length, results: matching.slice(offset, offset + limit).map(strip), facets }) });
   };
 
@@ -1983,6 +1989,178 @@ async function run() {
     assert.equal(await page.evaluate(() => window.__xss), undefined, 'a key in the address cannot inject markup');
     assert.equal(await page.locator('gbif-occurrence-record img').count(), 0);
   });
+  /* ---------- Review 2: scope, text box, years, licences, address ---------- */
+
+  const everythingAsked = (page) => searches(page).length + (page.everythingRequests?.length ?? 0);
+
+  for (const [what, attrs] of [
+    ['a taxon key that is not a key', 'taxon-key="Puma concolor"'],
+    ['two taxon keys', 'taxon-key="4QHKG,623RM"'],
+    ['a dataset key with a space', 'taxon-key="4QHKG" dataset-key="a b"'],
+    ['a country GBIF does not know', 'taxon-key="4QHKG" country="UK"'],
+    ['a basis of record with a space', 'taxon-key="4QHKG" basis-of-record="PRESERVED SPECIMEN"'],
+    ['a year that is not one', 'taxon-key="4QHKG" year="soon"']
+  ]) {
+    await test(`search: ${what} in the page's own attributes sends nothing, says so, and is not widened`, async (make) => {
+      const page = await make();
+      await page.mount(`<gbif-occurrence-search id="s" ${attrs}></gbif-occurrence-search>
+        <gbif-occurrence-filters search="#s"></gbif-occurrence-filters>
+        <gbif-occurrence-table search="#s"></gbif-occurrence-table>
+        <gbif-occurrence-gallery search="#s"></gbif-occurrence-gallery>`);
+      await page.locator('gbif-occurrence-table [role=alert]', { hasText: 'cannot be shown' }).waitFor(T);
+      await page.locator('gbif-occurrence-gallery [role=alert]', { hasText: 'cannot be shown' }).waitFor(T);
+      await page.locator('gbif-occurrence-filters [role=alert]', { hasText: 'cannot be shown' }).waitFor(T);
+      await settle(page, 300);
+      assert.equal(everythingAsked(page), 0, 'no request at all, in particular none for everything');
+      assert.equal(await page.locator('gbif-occurrence-table tbody tr').count(), 0);
+      assert.ok((await page.events('gbif-error')).length >= 1, 'the page is told');
+      assert.deepEqual(page.errors, []);
+    });
+  }
+
+  await test('search: fixing the attribute that was not valid brings the search back, and the panel offers nothing that is fixed', async (make) => {
+    const page = await make();
+    await page.mount(ALL_VIEWS('country="XX"'));
+    await page.locator('gbif-occurrence-table [role=alert]').waitFor(T);
+    assert.equal(everythingAsked(page), 0);
+    await page.evaluate(() => (document.querySelector('#s').country = 'NO'));
+    await waitTotal(page, 15);
+    assert.deepEqual(tableReqs(page).map((p) => p.getAll('country')).at(-1), ['NO']);
+    assert.equal(await page.locator('gbif-occurrence-filters legend', { hasText: 'Country' }).count(), 0, 'a fixed filter is not offered');
+    await page.evaluate(() => (document.querySelector('#s').country = 'ZZ'));
+    await page.locator('gbif-occurrence-table [role=alert]', { hasText: 'cannot be shown' }).waitFor(T);
+  });
+
+  await test('search: the taxon and its checklist reach every request (the stub refuses a taxon without its checklist)', async (make) => {
+    const page = await make();
+    await page.mount(ALL_VIEWS());
+    await waitTotal(page, 60);
+    for (const p of searches(page)) {
+      assert.equal(p.get('taxonKey'), '4QHKG');
+      assert.equal(p.get('checklistKey'), '7ddf754f-d193-4cc9-b351-99906754a03b');
+    }
+    await page.evaluate(() => (document.querySelector('#s').taxonKey = 'OTHER'));
+    await page.locator('gbif-occurrence-table', { hasText: 'No occurrences match' }).waitFor(T);
+    // The same for a predicate: its taxon predicate carries the checklist.
+    const predicate = await make();
+    await predicate.mount(`<gbif-occurrence-search id="s" taxon-key="4QHKG" predicate='{"type":"equals","key":"COUNTRY","value":"NO"}'></gbif-occurrence-search>
+      <gbif-occurrence-table search="#s"></gbif-occurrence-table>`);
+    await waitTotal(predicate, 15);
+    await predicate.evaluate(() => (document.querySelector('#s').taxonKey = 'OTHER'));
+    await predicate.locator('gbif-occurrence-table', { hasText: 'No occurrences match' }).waitFor(T);
+  });
+
+  await test('search: has-coordinate="false" is false', async (make) => {
+    const page = await make();
+    await page.mount(ALL_VIEWS('has-coordinate="false"'));
+    await waitTotal(page, 60);
+    assert.ok(tableReqs(page).every((p) => !p.has('hasCoordinate')));
+    await page.evaluate(() => document.querySelector('#s').setAttribute('has-coordinate', ''));
+    await waitTotal(page, 30);
+    await page.evaluate(() => document.querySelector('#s').setAttribute('has-coordinate', 'false'));
+    await waitTotal(page, 60);
+  });
+
+  await test('search: a country in the address that GBIF would refuse is dropped, and the search still works', async (make) => {
+    const page = await make();
+    await page.goto(`${PAGE_URL}?gbif_country=UK&gbif_country=NO`);
+    await page.mount(ALL_VIEWS('sync-url'));
+    await waitTotal(page, 15);
+    assert.deepEqual(page.badRequests ?? [], []);
+    assert.deepEqual(await page.evaluate(() => document.querySelector('#s').userQuery), { country: ['NO'] });
+  });
+
+  await test('panel: a facet value the search cannot apply is not offered; international waters can be chosen', async (make) => {
+    const S = freshState();
+    S.records[0].countryCode = 'XZ';
+    S.records[0].country = null;
+    S.records[1].countryCode = 'UK';
+    const page = await make(S);
+    await page.mount(ALL_VIEWS());
+    await page.locator('gbif-occurrence-filters .gbif-occurrence-filters__option').first().waitFor(T);
+    assert.equal(await page.locator('gbif-occurrence-filters .gbif-occurrence-filters__option', { hasText: 'UK' }).count(), 0, 'UK would be refused by GBIF');
+    await checkbox(page, 'International waters').check();
+    await waitTotal(page, 1);
+    assert.deepEqual(page.badRequests ?? [], []);
+  });
+
+  await test('panel: the free-text box keeps the space the visitor has just typed', async (make) => {
+    const page = await make();
+    await page.mount(ALL_VIEWS());
+    await waitTotal(page, 60);
+    const box = page.locator('gbif-occurrence-filters input[type=search]');
+    await box.click();
+    await page.keyboard.type('puma ');
+    await sleep(800); // the search applies the trimmed text; it must not be written back over the box
+    assert.equal(await box.inputValue(), 'puma ');
+    await page.keyboard.type('concolor 1');
+    await sleep(800);
+    assert.equal(await box.inputValue(), 'puma concolor 1');
+    assert.equal(await page.evaluate(() => document.querySelector('#s').userQuery.q), 'puma concolor 1');
+    // A change from outside still shows in the box.
+    await page.evaluate(() => document.querySelector('#s').setFilters({ q: 'other' }));
+    await page.waitForFunction(() => document.querySelector('gbif-occurrence-filters').shadowRoot.querySelector('input[type=search]').value === 'other', null, T);
+    await page.evaluate(() => document.querySelector('#s').reset());
+    await page.waitForFunction(() => document.querySelector('gbif-occurrence-filters').shadowRoot.querySelector('input[type=search]').value === '', null, T);
+  });
+
+  await test('panel: a year that is not one keeps the year filter in force and says so', async (make) => {
+    const page = await make();
+    await page.mount(ALL_VIEWS());
+    await waitTotal(page, 60);
+    await page.locator('gbif-occurrence-filters [name=year-from]').fill('2000');
+    await page.locator('gbif-occurrence-filters [name=year-from]').dispatchEvent('change');
+    await page.waitForFunction(() => document.querySelector('#s').userQuery.year === '2000,*', null, T);
+    const before = (await page.events('gbif-query-change')).length;
+    await page.locator('gbif-occurrence-filters [name=year-to]').evaluate((el) => { el.value = '12345'; el.dispatchEvent(new Event('change')); });
+    await page.locator('gbif-occurrence-filters [role=alert]', { hasText: 'Enter a year' }).waitFor(T);
+    assert.equal(await page.evaluate(() => document.querySelector('#s').userQuery.year), '2000,*', 'the year in force is kept');
+    assert.equal((await page.events('gbif-query-change')).length, before);
+    assert.equal(await page.locator('gbif-occurrence-filters [name=year-to]').getAttribute('aria-invalid'), 'true');
+    await page.locator('gbif-occurrence-filters [name=year-to]').evaluate((el) => { el.value = '2010'; el.dispatchEvent(new Event('change')); });
+    await page.waitForFunction(() => document.querySelector('#s').userQuery.year === '2000,2010', null, T);
+    assert.equal(await page.locator('gbif-occurrence-filters [role=alert]').count(), 0);
+  });
+
+  await test('panel: filters and facet-limit given or changed after the page has loaded are used', async (make) => {
+    const page = await make();
+    await page.mount(ALL_VIEWS('', ''));
+    await waitTotal(page, 60);
+    await page.evaluate(() => document.querySelector('gbif-occurrence-filters').setAttribute('filters', 'country'));
+    await page.waitForFunction(() => document.querySelector('gbif-occurrence-filters').shadowRoot.querySelectorAll('legend, label.gbif-occurrence-filters__legend').length === 1, null, T);
+    await page.evaluate(() => document.querySelector('gbif-occurrence-filters').setAttribute('facet-limit', '2'));
+    await page.waitForFunction(() => document.querySelector('gbif-occurrence-filters').shadowRoot.querySelectorAll('.gbif-occurrence-filters__option').length === 2, null, T);
+  });
+
+  await test('gallery and table: a licences or page-size attribute added after loading applies at once', async (make) => {
+    const page = await make();
+    await page.mount(`<gbif-occurrence-search id="s" taxon-key="4QHKG"></gbif-occurrence-search>
+      <gbif-occurrence-table id="t" search="#s"></gbif-occurrence-table>
+      <gbif-occurrence-gallery id="g" search="#s" page-size="50"></gbif-occurrence-gallery>`);
+    await page.locator('gbif-occurrence-gallery img').first().waitFor(T);
+    const tiles = () => page.locator('gbif-occurrence-gallery .gbif-occurrence-gallery__tile').count();
+    const all = await tiles();
+    assert.equal(all, 20);
+    await page.evaluate(() => document.querySelector('#g').setAttribute('licenses', 'cc0'));
+    await page.waitForFunction((n) => document.querySelector('#g').shadowRoot.querySelectorAll('.gbif-occurrence-gallery__tile').length < n, all, T);
+    const narrowed = await tiles();
+    assert.ok(narrowed > 0 && narrowed < all, `${narrowed} of ${all}`);
+    assert.equal(await page.locator('gbif-occurrence-table tbody tr').count(), 20);
+    await page.evaluate(() => document.querySelector('#t').setAttribute('page-size', '5'));
+    await page.waitForFunction(() => document.querySelector('#t').shadowRoot.querySelectorAll('tbody tr').length === 5, null, T);
+  });
+
+  await test('search: writing the address leaves the page\'s other parameters exactly as they were', async (make) => {
+    const page = await make();
+    await page.goto(`${PAGE_URL}?ref=a%20b&flag&semi=a;b`);
+    await page.mount(ALL_VIEWS('sync-url'));
+    await waitTotal(page, 60);
+    await page.evaluate(() => document.querySelector('#s').setFilters({ country: ['NO'] }));
+    await waitTotal(page, 15);
+    const search = await page.evaluate(() => location.search);
+    assert.equal(search, '?ref=a%20b&flag&semi=a;b&gbif_country=NO');
+  });
+
 }
 
 (async () => {

@@ -1,6 +1,7 @@
 import { html, css, nothing } from 'lit';
+import { live } from 'lit/directives/live.js';
 import { GbifSearchConsumer } from '../shared/search-consumer.js';
-import { FILTERS, RECORD_LICENSES, countryName } from '../shared/filters.js';
+import { FILTERS, RECORD_LICENSES, countryName, normalizeFilter } from '../shared/filters.js';
 import { basisLabel } from '../shared/occurrence.js';
 import { clampInt } from '../shared/format.js';
 import { emit } from '../shared/events.js';
@@ -45,7 +46,8 @@ export class GbifOccurrenceFilters extends GbifSearchConsumer {
     _query: { state: true },
     _facets: { state: true },
     _total: { state: true },
-    _facetStatus: { state: true }
+    _facetStatus: { state: true },
+    _yearInvalid: { state: true }
   };
 
   static styles = [
@@ -120,6 +122,7 @@ export class GbifOccurrenceFilters extends GbifSearchConsumer {
     this._facets = {};
     this._total = null;
     this._facetStatus = 'idle';
+    this._yearInvalid = false;
     this._run = 0;
     this._typing = 0;
   }
@@ -137,6 +140,14 @@ export class GbifOccurrenceFilters extends GbifSearchConsumer {
   onSearchBound() {
     this._query = this.searchEl.userQuery;
     this._load();
+  }
+
+  updated(changed) {
+    super.updated(changed);
+    // Offering other filters, or a different number of values, needs the counts for them.
+    const first = !this._updatedOnce;
+    this._updatedOnce = true;
+    if (!first && this.searchEl && (changed.has('filters') || changed.has('facetLimit'))) this._load();
   }
 
   onQueryChange() {
@@ -181,6 +192,17 @@ export class GbifOccurrenceFilters extends GbifSearchConsumer {
     this.searchEl.setFilters({ [key]: on ? [...current, value] : current.filter((v) => v !== value) });
   }
 
+  /**
+   * What the search box should hold. The search keeps the text trimmed, so writing it back would delete the
+   * space the visitor has just typed ("puma " becoming "puma"). While the box holds the same text plus
+   * spaces around it, leave it alone.
+   */
+  _textValue() {
+    const shown = this._query.q ?? '';
+    const input = this.renderRoot?.querySelector('#gbif-filter-q');
+    return input && normalizeFilter('q', input.value) === (shown || undefined) ? input.value : shown;
+  }
+
   _onText(event, immediately) {
     const value = event.target.value;
     clearTimeout(this._typing);
@@ -191,7 +213,11 @@ export class GbifOccurrenceFilters extends GbifSearchConsumer {
   _onYear() {
     const from = this.renderRoot.querySelector('[name=year-from]').value.trim();
     const to = this.renderRoot.querySelector('[name=year-to]').value.trim();
-    this.searchEl.setFilters({ year: from || to ? `${from || '*'},${to || '*'}` : null });
+    const year = from || to ? `${from || '*'},${to || '*'}` : null;
+    // A year that is not one (12345, or 2020 to 1990 typed as text) leaves the filter as it was and says so;
+    // it does not silently remove the year that was in force.
+    this._yearInvalid = year !== null && normalizeFilter('year', year) === undefined;
+    if (!this._yearInvalid) this.searchEl.setFilters({ year });
   }
 
   _reset() {
@@ -205,7 +231,8 @@ export class GbifOccurrenceFilters extends GbifSearchConsumer {
     const facet = FILTERS[key].facet;
     const counted = this._facets[facet] ?? [];
     const rows = [
-      ...counted.map(({ name, count }) => ({ name, count })),
+      // A value the filter would refuse to apply is not offered: ticking it would do nothing.
+      ...counted.filter(({ name }) => normalizeFilter(key, name) !== undefined).map(({ name, count }) => ({ name, count })),
       // A value that is chosen but not in the list (it has no matches now) must stay visible, to be unchosen.
       ...selected.filter((name) => !counted.some((c) => c.name === name)).map((name) => ({ name, count: 0 }))
     ];
@@ -221,7 +248,7 @@ export class GbifOccurrenceFilters extends GbifSearchConsumer {
                 <label class="gbif-occurrence-filters__option">
                   <input
                     type="checkbox"
-                    .checked=${selected.includes(name)}
+                    .checked=${live(selected.includes(name))}
                     @change=${(event) => this._toggle(key, name, event.target.checked)}
                   />
                   <span class="gbif-occurrence-filters__option-label">${label(name)}</span>
@@ -242,7 +269,7 @@ export class GbifOccurrenceFilters extends GbifSearchConsumer {
             id="gbif-filter-q"
             class="gbif-occurrence-filters__input"
             type="search"
-            .value=${this._query.q ?? ''}
+            .value=${this._textValue()}
             @input=${(event) => this._onText(event, false)}
             @keydown=${(event) => event.key === 'Enter' && this._onText(event, true)}
           />
@@ -253,19 +280,20 @@ export class GbifOccurrenceFilters extends GbifSearchConsumer {
           <legend class="gbif-occurrence-filters__legend">${FILTERS.year.label}</legend>
           <div class="gbif-occurrence-filters__years">
             <label>From
-              <input class="gbif-occurrence-filters__input" name="year-from" type="number" min="0" max="9999" step="1" .value=${from} @change=${this._onYear} />
+              <input class="gbif-occurrence-filters__input" name="year-from" type="number" min="0" max="9999" step="1" aria-invalid=${this._yearInvalid ? 'true' : 'false'} .value=${from} @change=${this._onYear} />
             </label>
             <label>To
-              <input class="gbif-occurrence-filters__input" name="year-to" type="number" min="0" max="9999" step="1" .value=${to} @change=${this._onYear} />
+              <input class="gbif-occurrence-filters__input" name="year-to" type="number" min="0" max="9999" step="1" aria-invalid=${this._yearInvalid ? 'true' : 'false'} .value=${to} @change=${this._onYear} />
             </label>
           </div>
+          ${this._yearInvalid ? html`<p class="gbif-card__state" role="alert">Enter a year from 0 to 9999.</p>` : nothing}
         </fieldset>`;
       }
       case 'hasCoordinate':
         return html`<label class="gbif-occurrence-filters__option">
           <input
             type="checkbox"
-            .checked=${this._query.hasCoordinate === true}
+            .checked=${live(this._query.hasCoordinate === true)}
             @change=${(event) => this.searchEl.setFilters({ hasCoordinate: event.target.checked })}
           />
           <span class="gbif-occurrence-filters__option-label">${FILTERS.hasCoordinate.label}</span>

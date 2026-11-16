@@ -12,7 +12,8 @@ import {
   toParams,
   readUrlQuery,
   writeUrlQuery,
-  countryName
+  countryName,
+  filterProblem
 } from '../../src/shared/filters.js';
 import {
   COLUMNS,
@@ -264,4 +265,56 @@ test('fetchFacets asks for counts that ignore a filter\'s own choice, and cleans
     assert.equal(q.get('facetMincount'), '1');
     assert.equal(q.get('facetLimit'), '15');
   });
+});
+
+test('countries are the ones GBIF accepts, not whatever ISO or Intl knows', () => {
+  // Checked live: GBIF answers country=UK and country=EU with 400, and country=XZ (international waters) with 200.
+  for (const code of ['UK', 'EU', 'UN', 'AN', 'CS', 'YU', 'EA', 'IC', 'XX', 'ZZ']) {
+    assert.equal(normalizeFilter('country', code), undefined, `${code} is refused`);
+  }
+  for (const code of ['NO', 'XK', 'XZ', 'GB', 'US', 'TF']) {
+    assert.deepEqual(normalizeFilter('country', code.toLowerCase()), [code], `${code} is accepted`);
+  }
+  assert.equal(countryName('XZ'), 'International waters');
+  assert.equal(countryName('NO'), 'Norway');
+});
+
+test('filterProblem says when a filter the page author gave would be dropped', () => {
+  assert.equal(filterProblem('country', undefined), undefined, 'not given');
+  assert.equal(filterProblem('country', '  '), undefined, 'blank is not given');
+  assert.equal(filterProblem('country', 'NO SE'), undefined);
+  assert.match(filterProblem('country', 'XX'), /Country: "XX"/);
+  assert.match(filterProblem('country', 'NO XX'), /"XX"/, 'one bad value among good ones is still a mistake');
+  assert.match(filterProblem('basisOfRecord', 'PRESERVED SPECIMEN'), /"PRESERVED", "SPECIMEN"/);
+  assert.equal(filterProblem('basisOfRecord', 'PRESERVED_SPECIMEN human_observation'), undefined);
+  assert.match(filterProblem('year', 'abc'), /Year/);
+  assert.match(filterProblem('year', '*,*'), /Year/);
+  assert.equal(filterProblem('year', '2000-2010'), undefined);
+  assert.equal(filterProblem('hasCoordinate', false), undefined);
+  assert.equal(filterProblem('nonsense', 'x'), undefined);
+});
+
+test('year ranges take an open start as well as an open end', () => {
+  assert.equal(normalizeFilter('year', '*-2000'), '*,2000');
+  assert.equal(normalizeFilter('year', '2000-*'), '2000,*');
+  assert.equal(normalizeFilter('year', '2010-2000'), '2000,2010');
+});
+
+test('free text is cut by characters, never in the middle of one', () => {
+  const q = normalizeFilter('q', '😀'.repeat(300));
+  assert.equal([...q].length, 200);
+  assert.equal(q, '😀'.repeat(200));
+});
+
+test('writing the address leaves other parameters exactly as they were written', () => {
+  const url = new URL('https://site.example/p?gbif_country=UK&ref=a%20b&flag&semi=a;b&x=%E2%9C%93&gbif_year=1999&last=1#h');
+  writeUrlQuery(url, { country: ['NO'] }, 'gbif_');
+  assert.equal(url.search, '?ref=a%20b&flag&semi=a;b&x=%E2%9C%93&last=1&gbif_country=NO');
+  writeUrlQuery(url, {}, 'gbif_');
+  assert.equal(url.search, '?ref=a%20b&flag&semi=a;b&x=%E2%9C%93&last=1');
+  assert.equal(url.hash, '#h');
+  // Another search's parameters (a different prefix) are not ours to remove.
+  const two = new URL('https://site.example/p?b_country=SE&gbif_country=NO');
+  writeUrlQuery(two, {}, 'gbif_');
+  assert.equal(two.search, '?b_country=SE');
 });

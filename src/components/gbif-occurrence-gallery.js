@@ -136,7 +136,11 @@ export class GbifOccurrenceGallery extends GbifSearchConsumer {
 
   updated(changed) {
     super.updated(changed);
-    if (this.searchEl && ['pageSize', 'licenses'].some((n) => changed.has(n) && changed.get(n) !== undefined)) this._load(0);
+    // Any later change reloads, including the first value an attribute is given after the page has loaded
+    // (a page that switches to "commercial licences only" must not keep showing what it excluded).
+    const first = !this._updatedOnce;
+    this._updatedOnce = true;
+    if (!first && this.searchEl && ['pageSize', 'licenses'].some((n) => changed.has(n))) this._load(0);
   }
 
   onSearchBound() {

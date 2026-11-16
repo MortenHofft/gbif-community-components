@@ -46,7 +46,7 @@ export class GbifSearchConsumer extends GbifLinkedElement {
 
   /**
    * What to draw instead of the component when there is no usable search: a message if none was
-   * found, or if its predicate is not valid; nothing while it is still being looked for.
+   * found, or if its attributes or predicate are not valid; nothing while it is still being looked for.
    * Returns `null` when the component can draw itself.
    */
   renderSearchProblem() {
@@ -56,7 +56,7 @@ export class GbifSearchConsumer extends GbifLinkedElement {
     if (this._searchStatus !== 'bound') return nothing;
     if (!this.searchEl.valid) {
       return html`<p class="gbif-card__state" role="alert">
-        This search cannot be shown: its predicate is not valid (${this.searchEl.predicateError}).
+        This search cannot be shown. ${this.searchEl.problem}.
       </p>`;
     }
     return null;

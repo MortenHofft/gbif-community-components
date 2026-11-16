@@ -115,7 +115,10 @@ export class GbifOccurrenceTable extends GbifSearchConsumer {
 
   updated(changed) {
     super.updated(changed);
-    if (changed.has('pageSize') && this.searchEl && changed.get('pageSize') !== undefined) this._load(0);
+    // Any later change reloads, including the first value an attribute is given after the page has loaded.
+    const first = !this._updatedOnce;
+    this._updatedOnce = true;
+    if (!first && changed.has('pageSize') && this.searchEl) this._load(0);
   }
 
   onSearchBound() {

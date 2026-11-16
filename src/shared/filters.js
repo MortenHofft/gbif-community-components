@@ -33,6 +33,15 @@ export const RECORD_LICENSES = {
   CC_BY_NC_4_0: 'CC BY-NC 4.0'
 };
 
+/**
+ * The country codes GBIF accepts: its own enumeration (GET /v1/enumeration/country) plus XZ, which the
+ * occurrence search takes for international waters. This is not ISO 3166 as a whole: GBIF refuses codes such as
+ * UK and EU, and takes XK (Kosovo) and XZ. A code outside this list is a request that GBIF answers with an error.
+ */
+export const COUNTRY_CODES = new Set(
+  'AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS XK XZ YE YT ZA ZM ZW'.split(' ')
+);
+
 const regionNames = (() => {
   try {
     return new Intl.DisplayNames(['en'], { type: 'region' });
@@ -41,19 +50,11 @@ const regionNames = (() => {
   }
 })();
 
-/** Is this a country code GBIF will accept? Without Intl, any two letters pass. */
-function isKnownCountry(code) {
-  if (!regionNames) return true;
-  try {
-    const name = regionNames.of(code);
-    return !!name && name !== code && name !== 'Unknown Region';
-  } catch {
-    return false;
-  }
-}
+const isKnownCountry = (code) => COUNTRY_CODES.has(code);
 
 /** Display name of a country code, in English. Falls back to the code. */
 export function countryName(code) {
+  if (code === 'XZ') return 'International waters';
   try {
     return regionNames?.of(code) || code;
   } catch {
@@ -68,9 +69,13 @@ const toList = (raw) => {
 };
 
 /** A normalizer for filters that take a list of values of one kind. */
-const multi = (parseValue) => (raw) => {
-  const values = [...new Set(toList(raw).map((v) => parseValue(String(v).trim())).filter(Boolean))];
-  return values.length ? values : undefined;
+const multi = (parseValue) => {
+  const normalize = (raw) => {
+    const values = [...new Set(toList(raw).map((v) => parseValue(String(v).trim())).filter(Boolean))];
+    return values.length ? values : undefined;
+  };
+  normalize.parseValue = parseValue;
+  return normalize;
 };
 
 /** Years: `2000`, `2000,2020`, `2000,*` or `*,1990` (also `2000-2020`). Reversed ranges are put right. */
@@ -79,7 +84,7 @@ function normalizeYear(raw) {
   if (typeof text !== 'string') return undefined;
   const parts = text
     .trim()
-    .replace(/^(\d{1,4})\s*[-–]\s*(\d{1,4}|\*)$/, '$1,$2')
+    .replace(/^(\d{1,4}|\*)\s*[-–]\s*(\d{1,4}|\*)$/, '$1,$2')
     .split(/\s*,\s*/);
   if (parts.length > 2 || parts.some((p) => !/^(\*|\d{1,4})$/.test(p))) return undefined;
   if (parts.length === 1) return parts[0] === '*' ? undefined : String(Number(parts[0]));
@@ -101,7 +106,7 @@ export const FILTERS = {
   q: {
     type: 'text',
     label: 'Search',
-    normalize: (raw) => (typeof raw === 'string' && raw.trim() ? raw.trim().slice(0, 200) : undefined)
+    normalize: (raw) => (typeof raw === 'string' && raw.trim() ? [...raw.trim()].slice(0, 200).join('') : undefined)
   },
   country: {
     type: 'multi',
@@ -132,6 +137,24 @@ export const FILTERS = {
 /** Normalize one filter's value. `undefined` means "no filter". */
 export function normalizeFilter(key, raw) {
   return Object.hasOwn(FILTERS, key) ? FILTERS[key].normalize(raw) : undefined;
+}
+
+/**
+ * What is wrong with a filter value that was given, or `undefined` if it is fine or not given. For a list, any
+ * value that cannot be used counts: `country="NO XX"` is a mistake, not a request for Norway. Used for the
+ * page author's own attributes, where dropping a value would silently widen the search.
+ */
+export function filterProblem(key, raw) {
+  if (!Object.hasOwn(FILTERS, key)) return undefined;
+  if (raw === undefined || raw === null || raw === false) return undefined;
+  const given = typeof raw === 'string' ? raw.trim() : raw;
+  if (given === '' || (Array.isArray(given) && !given.length)) return undefined;
+  const filter = FILTERS[key];
+  if (filter.normalize.parseValue) {
+    const bad = toList(given).map((v) => String(v).trim()).filter((v) => v && !filter.normalize.parseValue(v));
+    return bad.length ? `${filter.label}: "${bad.join('", "')}" is not a value GBIF accepts` : undefined;
+  }
+  return filter.normalize(given) === undefined ? `${filter.label}: "${given}" is not a value GBIF accepts` : undefined;
 }
 
 /** Keep only known filters, each normalized. */
@@ -180,11 +203,30 @@ export function readUrlQuery(searchParams, prefix = '') {
   return normalizeQuery(raw);
 }
 
-/** Write a query into a URL, replacing whatever filters were there and leaving other parameters alone. */
+/**
+ * Write a query into a URL, replacing whatever filters were there. Every other parameter is kept exactly as
+ * it was written (no re-encoding, no added `=`), because a router on the host page may read the raw text.
+ */
 export function writeUrlQuery(url, query, prefix = '') {
-  for (const key of Object.keys(FILTERS)) url.searchParams.delete(prefix + key);
+  const ours = new Set(Object.keys(FILTERS).map((key) => prefix + key));
+  const nameOf = (segment) => {
+    const raw = segment.split('=', 1)[0].replace(/\+/g, ' ');
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  };
+  const kept = url.search
+    .replace(/^\?/, '')
+    .split('&')
+    .filter((segment) => segment && !ours.has(nameOf(segment)));
+  const added = new URLSearchParams();
   for (const [key, value] of Object.entries(toParams(query))) {
-    for (const v of Array.isArray(value) ? value : [value]) url.searchParams.append(prefix + key, v);
+    for (const v of Array.isArray(value) ? value : [value]) added.append(prefix + key, v);
   }
+  const text = added.toString();
+  const all = text ? [...kept, text] : kept;
+  url.search = all.join('&');
   return url;
 }

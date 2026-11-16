@@ -1,7 +1,7 @@
 import { LitElement, css, html } from 'lit';
 import { resolveConfig } from '../shared/config.js';
 import { emit } from '../shared/events.js';
-import { FILTERS, mergeQuery, normalizeQuery, readUrlQuery, sameQuery, toParams, writeUrlQuery } from '../shared/filters.js';
+import { FILTERS, filterProblem, mergeQuery, normalizeQuery, readUrlQuery, sameQuery, toParams, writeUrlQuery } from '../shared/filters.js';
 import { buildPredicate, parsePredicate } from '../shared/predicate.js';
 import { fetchFacets, fetchFacetsByPredicate, searchOccurrences, searchOccurrencesByPredicate } from '../shared/occurrence.js';
 import { GbifApiError } from '../shared/api.js';
@@ -44,7 +44,7 @@ const cleanKey = (value) => (typeof value === 'string' && /^[\w.-]{1,64}$/.test(
  * visitor adds a history entry; `url-history="replace"` replaces the current one.
  *
  * Properties: `query` (all filters in force), `userQuery`, `params` (the request
- * parameters), `fixed` (names of the author's filters), `config`, `valid`, `predicateError`.
+ * parameters), `fixed` (names of the author's filters), `config`, `valid`, `problem` (why it is not valid), `predicateError`.
  * Methods: `setFilters(patch)` (a value of `null`, `''` or `[]` removes a filter), `reset()`.
  * Event: `gbif-query-change`, detail `{ query, userQuery, params, predicate, source }`, where
  * `source` is `update`, `reset`, `url` or `attributes`, and `predicate` is everything that narrows
@@ -63,7 +63,8 @@ export class GbifOccurrenceSearch extends LitElement {
     year: { type: String },
     basisOfRecord: { type: String, attribute: 'basis-of-record' },
     license: { type: String },
-    hasCoordinate: { type: Boolean, attribute: 'has-coordinate' },
+    // `has-coordinate="false"` is false (a plain boolean attribute would make it true).
+    hasCoordinate: { attribute: 'has-coordinate', converter: { fromAttribute: (value) => value !== null && value !== 'false' } },
     q: { type: String },
     predicate: { type: String },
     syncUrl: { type: Boolean, attribute: 'sync-url' },
@@ -102,16 +103,40 @@ export class GbifOccurrenceSearch extends LitElement {
   }
 
   willUpdate(changed) {
-    if (changed.has('predicate') && this._parsed?.error) {
-      const message = `The predicate is not valid: ${this._parsed.error}.`;
-      console.warn(`[gbif-components] <${this.localName}> ${message}`);
-      emit(this, 'gbif-error', { component: this.localName, url: undefined, status: 0, message });
+    const scope = [...SCOPE_PROPERTIES, ...BASE_FILTER_PROPERTIES];
+    if (scope.some((name) => changed.has(name)) && this.problem !== this._reportedProblem) {
+      this._reportedProblem = this.problem;
+      if (this.problem) {
+        const message = `${this.problem}.`;
+        console.warn(`[gbif-components] <${this.localName}> ${message}`);
+        emit(this, 'gbif-error', { component: this.localName, url: undefined, status: 0, message });
+      }
     }
   }
 
-  /** Is the search fit to be asked about? False if a predicate was given and is not valid. */
+  /**
+   * Is the search fit to be asked about? False if the page author's scope or filters, or the predicate, is
+   * not valid. Dropping what is not valid would widen the search (a mistyped `taxon-key` would show all of
+   * GBIF), so nothing is asked until it is fixed.
+   */
   get valid() {
-    return !this._parsed?.error;
+    return !this.problem;
+  }
+
+  /** Why the search cannot be asked, or `undefined`: the first problem in the page author's attributes. */
+  get problem() {
+    if (this._parsed?.error) return `The predicate is not valid: ${this._parsed.error}`;
+    for (const [name, attribute] of [['taxonKey', 'taxon-key'], ['datasetKey', 'dataset-key']]) {
+      const value = this[name];
+      if (typeof value === 'string' && value.trim() && !cleanKey(value)) {
+        return `The ${attribute} "${value.trim().slice(0, 60)}" is not a key (one key, letters, digits, dots, dashes)`;
+      }
+    }
+    for (const name of BASE_FILTER_PROPERTIES) {
+      const message = filterProblem(name, this[name]);
+      if (message) return `The search is not valid: ${message}`;
+    }
+    return undefined;
   }
 
   /** Why the predicate is not valid, or `undefined`. */
@@ -177,7 +202,7 @@ export class GbifOccurrenceSearch extends LitElement {
   }
 
   _assertValid() {
-    if (!this.valid) throw new GbifApiError(`The predicate is not valid: ${this.predicateError}.`);
+    if (!this.valid) throw new GbifApiError(`${this.problem}.`);
   }
 
   /**
