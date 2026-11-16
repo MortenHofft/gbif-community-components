@@ -2591,8 +2591,8 @@ async function run() {
     S.thumbnails = 'missing';
     await page.mount(RECORD(7001));
     await page.waitForFunction(() => document.querySelector('gbif-occurrence-images')?.shadowRoot.querySelectorAll('img').length > 0, null, T);
-    const first = await page.evaluate(() => document.querySelector('gbif-occurrence-images')._fallback.size);
-    assert.ok(first >= 1, 'the cache had nothing, so the publisher\'s file is used');
+    // The error event of the first image arrives a moment after the image is added: wait for it.
+    await page.waitForFunction(() => document.querySelector('gbif-occurrence-images')._fallback.size >= 1, null, T);
     await page.evaluate(() => (document.querySelector('#r').occurrenceKey = '8006'));
     await page.waitForFunction(() => document.querySelector('gbif-occurrence-images').shadowRoot.querySelectorAll('figure').length === 5, null, T);
     assert.equal(await page.evaluate(() => document.querySelector('gbif-occurrence-images')._broken.size), 0);
