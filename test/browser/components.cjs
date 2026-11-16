@@ -1991,7 +1991,7 @@ async function run() {
     await page.locator('gbif-occurrence-groups section').first().waitFor(T);
     assert.equal(await page.locator('#title').textContent(), name);
     assert.match(await page.locator('#subtitle').textContent(), /Sweden/);
-    assert.equal(await page.locator('#subtitle a').getAttribute('href'), `https://www.gbif.org/occurrence/${new URL(page.url()).searchParams.get('key')}`);
+    assert.equal(await page.locator('#subtitle a').first().getAttribute('href'), `https://www.gbif.org/occurrence/${new URL(page.url()).searchParams.get('key')}`);
     assert.ok((await groupTitles(page)).includes('Location'));
     await page.locator('gbif-occurrence-location .leaflet-container').waitFor(T);
 
@@ -2646,6 +2646,37 @@ async function run() {
     await page.mount('<style>gbif-occurrence-filters { --gbif-badge-display: none; }</style>' + ALL_VIEWS());
     await page.locator('gbif-occurrence-filters .gbif-card__badge').first().waitFor({ state: 'attached', timeout: 10000 });
     assert.equal(await page.locator('gbif-occurrence-filters .gbif-card__badge').first().evaluate((e) => getComputedStyle(e).display), 'none');
+  });
+
+  await test('demo flow: taxon page -> occurrence search for that taxon -> occurrence -> back to the taxon page', async (make) => {
+    const page = await make();
+    // The taxon page starts from what it is linked with, and links on to a search for that taxon.
+    await page.goto(`${ORIGIN}/examples/index.html?taxon=4QHKG`);
+    await page.locator('gbif-taxon-card .gbif-taxon-card__name', { hasText: 'Puma concolor' }).first().waitFor(T);
+    await page.waitForFunction(() => document.querySelector('#occurrences-link').getAttribute('href').startsWith('occurrences.html?taxon=4QHKG&name='), null, T);
+    assert.ok(!page.requests.some((r) => r.path === '/v2/species/match' && r.query.scientificName === 'Puma concolor'), 'started from the key: the name was not matched again');
+    // By name, with a kingdom, it matches the name.
+    await page.goto(`${ORIGIN}/examples/index.html?name=Ficus&kingdom=Plantae`);
+    await page.waitForFunction(() => /taxon=FIC1/.test(document.querySelector('#occurrences-link').getAttribute('href')), null, T);
+
+    // The search is for that taxon, and the taxon is not widened to anything else.
+    page.requests.length = 0;
+    await page.goto(`${ORIGIN}/examples/occurrences.html?taxon=4QHKG&name=Puma%20concolor`);
+    assert.equal(await page.locator('#what').textContent(), 'Puma concolor');
+    await page.locator('gbif-occurrence-table tbody tr').first().waitFor(T);
+    assert.ok(searches(page).length > 0 && searches(page).every((p) => p.get('taxonKey') === '4QHKG'), 'every request is for the taxon');
+    assert.equal(await page.locator('#taxon-link').getAttribute('href'), 'index.html?taxon=4QHKG');
+    page.requests.length = 0;
+    await page.goto(`${ORIGIN}/examples/occurrences.html?taxon=${encodeURIComponent('Puma concolor')}`);
+    await page.locator('gbif-occurrence-table [role=alert]', { hasText: 'cannot be shown' }).waitFor(T);
+    await sleep(300);
+    assert.equal(searches(page).length, 0, 'a taxon that is not a key asks for nothing, and is not widened to all of GBIF');
+
+    // An occurrence links back to the taxon page, by name.
+    await page.goto(`${ORIGIN}/examples/occurrence.html?key=7001`);
+    await page.locator('#subtitle a', { hasText: 'The taxon page' }).waitFor(T);
+    assert.equal(await page.locator('#subtitle a', { hasText: 'The taxon page' }).getAttribute('href'), 'index.html?name=Puma%20concolor%20araucanus%20(Osgood%2C%201943)&kingdom=Animalia');
+    assert.deepEqual(page.errors, []);
   });
 
 }

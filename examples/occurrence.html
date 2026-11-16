@@ -66,7 +66,7 @@
       }
 
       record.addEventListener('gbif-record-load', (event) => {
-        const { scientificName, basisOfRecord, datasetName, country, eventDate, occurrenceKey } = event.detail;
+        const { scientificName, kingdom, basisOfRecord, datasetName, country, eventDate, occurrenceKey } = event.detail;
         document.title = `${scientificName ?? 'Occurrence'} · GBIF Community Components`;
         document.querySelector('#title').textContent = scientificName ?? 'Occurrence';
         const subtitle = document.querySelector('#subtitle');
@@ -77,6 +77,14 @@
         link.target = '_blank';
         link.rel = 'noopener';
         subtitle.append(' · ', link);
+        // The next step back up the flow: the taxon page for this name. (A record's names are GBIF's own, so the page
+        // matches the name against its checklist again instead of passing a key.)
+        if (scientificName) {
+          const taxon = document.createElement('a');
+          taxon.href = `index.html?name=${encodeURIComponent(scientificName)}${kingdom ? `&kingdom=${encodeURIComponent(kingdom)}` : ''}`;
+          taxon.textContent = 'The taxon page';
+          subtitle.append(' · ', taxon);
+        }
       });
 
       // From the search, "back" goes back to the same search, because its filters are in the address.

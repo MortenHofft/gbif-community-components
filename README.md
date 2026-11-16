@@ -380,7 +380,7 @@ The grouping is a fixed table of Darwin Core's terms, written from the standard'
 
 The record element says it once, so the cards need not each say it: **not found** (HTTP 404 or 410, and a `gbif-record-notfound` event), **not a key** (a key is digits only, and anything else is never put into an address), or **could not load** (and a `gbif-error`). If only the published record fails, the interpreted one is still shown, without "As published", and a `gbif-error` tells the page. While a record loads, or after its key changes, the cards show nothing of the previous one.
 
-Events: `gbif-record-load` (`occurrenceKey`, `scientificName`, `basisOfRecord`, `datasetName`, `country`, `eventDate`, enough for a page title), `gbif-record-notfound`, `gbif-error`, and `gbif-record-change` (`status`, `occurrenceKey`), which the cards listen to.
+Events: `gbif-record-load` (`occurrenceKey`, `scientificName`, `kingdom`, `basisOfRecord`, `datasetName`, `country`, `eventDate`, enough for a page title), `gbif-record-notfound`, `gbif-error`, and `gbif-record-change` (`status`, `occurrenceKey`), which the cards listen to.
 
 ## Getting started
 
@@ -399,6 +399,18 @@ The two browser tests need [Playwright](https://playwright.dev) to be resolvable
 The build writes `dist/gbif-components.js` (Lit and all fifteen components, about 46 KB gzipped) and, in `dist/chunks/`, Leaflet (about 54 KB gzipped, only downloaded when a map is drawn). **Serve the whole `dist/` directory**, not just the one file: the entry loads its chunks by relative path. The chunk names are fixed, so a directory can be copied to a CDN under a versioned path. There is no classic-script build, so load the bundle with `<script type="module">`. Content Management Systems that rewrite or concatenate scripts may need that to be turned off for this one. Nothing is published to npm or a CDN yet.
 
 If another script has already defined one of the tags, the bundle leaves it alone and warns in the console.
+
+### The demo site
+
+[`examples/`](examples/) holds four linked pages that show the components together, against the live GBIF API:
+
+1. `index.html`, **a taxon page** (taxon card with a clickable classification, images, occurrence map, type specimens), which links on to
+2. `occurrences.html?taxon=KEY`, **a search for that taxon's occurrences** (filter panel, table, image gallery, filters kept in the address), whose results open
+3. `occurrence.html?key=…`, **the occurrence** (images, location map with its notices, one card for each Darwin Core group, extensions, source and citation), which links back to the taxon page.
+
+`search.html` is a further page for searching with a subset given as a predicate. `npm run dev` serves them with live reload.
+
+`npm run build:demo` builds a static copy in `demo/` that loads the **built** bundle (the pages in `examples/` import the source, which only a dev server can serve). It needs no server of its own, so any static host works. On **Vercel**: import the repository as a new project, and leave the settings as they are (`vercel.json` sets the build command `npm run build:demo` and the output directory `demo`; the framework preset is "Other"). Every push to `main` then deploys. The pages call `api.gbif.org` and `tile.gbif.org` from the visitor's browser, so nothing else needs configuring.
 
 ## Scope
 

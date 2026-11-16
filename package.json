@@ -12,7 +12,8 @@
     "test": "node --test \"test/unit/*.test.js\"",
     "test:browser": "node test/browser/smoke.cjs",
     "test:browser:components": "node test/browser/components.cjs",
-    "test:all": "npm test && npm run test:browser:components"
+    "test:all": "npm test && npm run test:browser:components",
+    "build:demo": "node scripts/build-demo.mjs"
   },
   "dependencies": {
     "leaflet": "^1.9.4",
